@@ -1,6 +1,12 @@
+[![Release](https://img.shields.io/github/v/release/imi4u36d/ENVPilot?sort=semver)](https://github.com/imi4u36d/ENVPilot/releases)
+[![macOS](https://img.shields.io/badge/macOS-13%2B-111111)](https://github.com/imi4u36d/ENVPilot)
+[![Swift](https://img.shields.io/badge/Swift-6.2-F05138)](https://www.swift.org/)
+
 # ENVPilot
 
 ENVPilot 是一个 macOS 菜单栏工具，用于切换 Node / JDK 版本并管理环境配置。
+
+![ENVPilot Preview](./docs/preview.svg)
 
 ## 功能
 

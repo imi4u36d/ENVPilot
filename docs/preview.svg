@@ -1,0 +1,59 @@
+<svg width="1280" height="720" viewBox="0 0 1280 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="140" y1="60" x2="1140" y2="660" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F172A"/>
+      <stop offset="0.55" stop-color="#0B1220"/>
+      <stop offset="1" stop-color="#1E293B"/>
+    </linearGradient>
+    <linearGradient id="card" x1="268" y1="112" x2="1018" y2="620" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FAFC"/>
+      <stop offset="1" stop-color="#E2E8F0"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="240" y2="240" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22C55E"/>
+      <stop offset="1" stop-color="#0EA5E9"/>
+    </linearGradient>
+    <filter id="shadow" x="210" y="72" width="860" height="596" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="18"/>
+      <feGaussianBlur stdDeviation="24"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.0208333 0 0 0 0 0.0520833 0 0 0 0 0.121569 0 0 0 0.24 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+  </defs>
+  <rect width="1280" height="720" rx="32" fill="url(#bg)"/>
+  <circle cx="153" cy="132" r="94" fill="#22C55E" fill-opacity="0.18"/>
+  <circle cx="1142" cy="590" r="126" fill="#38BDF8" fill-opacity="0.16"/>
+  <g filter="url(#shadow)">
+    <rect x="258" y="102" width="764" height="500" rx="28" fill="url(#card)"/>
+    <rect x="258" y="102" width="764" height="54" rx="28" fill="#CBD5E1"/>
+    <circle cx="292" cy="129" r="8" fill="#F87171"/>
+    <circle cx="316" cy="129" r="8" fill="#FBBF24"/>
+    <circle cx="340" cy="129" r="8" fill="#34D399"/>
+    <rect x="300" y="198" width="268" height="22" rx="11" fill="#0F172A"/>
+    <rect x="300" y="236" width="360" height="14" rx="7" fill="#94A3B8"/>
+    <rect x="300" y="286" width="680" height="112" rx="22" fill="#FFFFFF"/>
+    <rect x="328" y="314" width="176" height="16" rx="8" fill="#0F172A"/>
+    <rect x="328" y="342" width="412" height="12" rx="6" fill="#94A3B8"/>
+    <rect x="760" y="318" width="88" height="34" rx="17" fill="#DCFCE7"/>
+    <rect x="864" y="318" width="88" height="34" rx="17" fill="#E0F2FE"/>
+    <rect x="300" y="426" width="680" height="132" rx="22" fill="#FFFFFF"/>
+    <rect x="328" y="454" width="216" height="16" rx="8" fill="#0F172A"/>
+    <rect x="328" y="484" width="292" height="12" rx="6" fill="#94A3B8"/>
+    <rect x="328" y="516" width="220" height="10" rx="5" fill="#CBD5E1"/>
+    <rect x="756" y="450" width="188" height="78" rx="20" fill="#0F172A"/>
+    <rect x="774" y="468" width="108" height="14" rx="7" fill="#F8FAFC"/>
+    <rect x="774" y="494" width="132" height="10" rx="5" fill="#94A3B8"/>
+  </g>
+  <rect x="94" y="110" width="124" height="124" rx="30" fill="url(#accent)"/>
+  <path d="M134 170C134 151.222 149.222 136 168 136H202V170C202 188.778 186.778 204 168 204H134V170Z" fill="#F8FAFC"/>
+  <path d="M168 170C168 151.222 183.222 136 202 136H218V170C218 197.614 195.614 220 168 220V170Z" fill="#0F172A" fill-opacity="0.12"/>
+  <text x="94" y="286" fill="#F8FAFC" font-family="SF Pro Display, Helvetica, Arial, sans-serif" font-size="54" font-weight="700">ENVPilot</text>
+  <text x="94" y="336" fill="#CBD5E1" font-family="SF Pro Display, Helvetica, Arial, sans-serif" font-size="24">macOS environment switcher for Node and JDK</text>
+  <text x="94" y="412" fill="#F8FAFC" font-family="SF Pro Text, Helvetica, Arial, sans-serif" font-size="24">• NVM-based Node install / switch / uninstall</text>
+  <text x="94" y="454" fill="#F8FAFC" font-family="SF Pro Text, Helvetica, Arial, sans-serif" font-size="24">• Visual runtime overview with active paths</text>
+  <text x="94" y="496" fill="#F8FAFC" font-family="SF Pro Text, Helvetica, Arial, sans-serif" font-size="24">• JDK selection and profile-based environment injection</text>
+</svg>
