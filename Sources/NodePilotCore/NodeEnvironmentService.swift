@@ -29,9 +29,13 @@ public final class NodeEnvironmentService: Sendable {
     }
 
     public func loadSnapshot() throws -> NodeRuntimeSnapshot {
-        // Best-effort only: the app should still load and expose install actions
-        // even if automatic Homebrew installation fails.
-        try? ensureNVMInstalledIfPossible()
+        try loadSnapshot(progress: nil)
+    }
+
+    public func loadSnapshot(progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot {
+        // Best-effort only: the app should still load and expose runtime state
+        // even if automatic Homebrew/NVM installation fails.
+        try? ensureNVMInstalledIfPossible(progress: progress)
 
         let settings = try configStore.load()
         let installations = mergeDefaultSelection(
@@ -46,10 +50,6 @@ public final class NodeEnvironmentService: Sendable {
         )
         let activeJavaVersion = javaDetector.detectActiveVersion()
         let activeJavaHome = javaDetector.detectActiveJavaHome()
-        let componentAvailabilities = buildComponentAvailabilities(
-            isNVMInstalled: detector.isNVMInstalled(),
-            javaInstallations: javaInstallations
-        )
 
         return NodeRuntimeSnapshot(
             installations: installations,
@@ -58,14 +58,18 @@ public final class NodeEnvironmentService: Sendable {
             javaInstallations: javaInstallations,
             activeJavaVersion: activeJavaVersion,
             activeJavaHome: activeJavaHome,
-            componentAvailabilities: componentAvailabilities,
             settings: settings
         )
     }
 
     @discardableResult
     public func selectDefaultNode(version: String) throws -> NodeRuntimeSnapshot {
-        try ensureNVMInstalled()
+        try selectDefaultNode(version: version, progress: nil)
+    }
+
+    @discardableResult
+    public func selectDefaultNode(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot {
+        try ensureNVMInstalled(progress: progress)
 
         let normalizedVersion = try normalizeOrThrow(version)
         let installations = detector.detectInstallations()
@@ -79,12 +83,17 @@ public final class NodeEnvironmentService: Sendable {
         settings.selectedVersion = normalizedVersion
         try configStore.save(settings)
 
-        return try loadSnapshot()
+        return try loadSnapshot(progress: progress)
     }
 
     @discardableResult
     public func installNode(version: String) throws -> NodeRuntimeSnapshot {
-        try ensureNVMInstalled()
+        try installNode(version: version, progress: nil)
+    }
+
+    @discardableResult
+    public func installNode(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot {
+        try ensureNVMInstalled(progress: progress)
 
         let requestedVersion = try normalizeInstallSpecOrThrow(version)
         let installCommand = """
@@ -94,9 +103,11 @@ public final class NodeEnvironmentService: Sendable {
 
         let result: ShellCommandResult
         do {
+            progress?("正在通过 NVM 安装 Node \(requestedVersion)...")
             result = try runNVMCommand(installCommand)
         } catch NodeEnvironmentServiceError.nvmCommandFailed(let message) where shouldRetryInstallWithRosetta(message: message) {
             do {
+                progress?("正在通过 Rosetta/x64 安装兼容版本 Node \(requestedVersion)...")
                 result = try runNVMCommand(installCommand, useRosetta: true)
             } catch NodeEnvironmentServiceError.nvmCommandFailed(let retryMessage) {
                 throw NodeEnvironmentServiceError.nvmCommandFailed(
@@ -117,12 +128,17 @@ public final class NodeEnvironmentService: Sendable {
         settings.selectedVersion = resolvedVersion
         try configStore.save(settings)
 
-        return try loadSnapshot()
+        return try loadSnapshot(progress: progress)
     }
 
     @discardableResult
     public func uninstallNode(version: String) throws -> NodeRuntimeSnapshot {
-        try ensureNVMInstalled()
+        try uninstallNode(version: version, progress: nil)
+    }
+
+    @discardableResult
+    public func uninstallNode(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot {
+        try ensureNVMInstalled(progress: progress)
 
         let normalizedVersion = try normalizeOrThrow(version)
         let installations = detector.detectInstallations()
@@ -138,7 +154,7 @@ public final class NodeEnvironmentService: Sendable {
         }
         try configStore.save(settings)
 
-        return try loadSnapshot()
+        return try loadSnapshot(progress: progress)
     }
 
     @discardableResult
@@ -163,21 +179,21 @@ public final class NodeEnvironmentService: Sendable {
         return try loadSnapshot()
     }
 
-    @discardableResult
-    public func installComponent(_ component: InstallableComponent) throws -> NodeRuntimeSnapshot {
-        try componentInstaller.install(component)
-        return try loadSnapshot()
-    }
+    func ensureNVMInstalledIfPossible(progress: (@Sendable (String) -> Void)?) throws {
+        if !componentInstaller.isHomebrewInstalled() {
+            progress?("正在安装 Homebrew...")
+            try componentInstaller.installHomebrew()
+        }
 
-    func ensureNVMInstalledIfPossible() throws {
-        guard !detector.isNVMInstalled(), componentInstaller.canInstall(.nvm) else {
+        guard !detector.isNVMInstalled(), componentInstaller.canInstallNVM() else {
             return
         }
-        try componentInstaller.install(.nvm)
+        progress?("正在安装 NVM...")
+        try componentInstaller.installNVM()
     }
 
-    func ensureNVMInstalled() throws {
-        try ensureNVMInstalledIfPossible()
+    func ensureNVMInstalled(progress: (@Sendable (String) -> Void)?) throws {
+        try ensureNVMInstalledIfPossible(progress: progress)
         guard detector.isNVMInstalled() else {
             throw NodeEnvironmentServiceError.nvmUnavailable
         }
@@ -264,26 +280,6 @@ public final class NodeEnvironmentService: Sendable {
         return installations.map {
             JavaInstallation(version: $0.version, homePath: $0.homePath, isDefault: $0.homePath == selectedJavaHome)
         }
-    }
-
-    func buildComponentAvailabilities(
-        isNVMInstalled: Bool,
-        javaInstallations: [JavaInstallation]
-    ) -> [ComponentAvailability] {
-        let hasJDK21 = javaInstallations.contains(where: { $0.version.hasPrefix("21.") || $0.version == "21" })
-
-        return [
-            ComponentAvailability(
-                component: .nvm,
-                isInstalled: isNVMInstalled,
-                isInstallSupported: componentInstaller.canInstall(.nvm)
-            ),
-            ComponentAvailability(
-                component: .jdk21,
-                isInstalled: hasJDK21,
-                isInstallSupported: componentInstaller.canInstall(.jdk21)
-            ),
-        ]
     }
 
     func shouldRetryInstallWithRosetta(message: String) -> Bool {

@@ -186,7 +186,23 @@ final class NodeEnvironmentServiceTests: XCTestCase {
 
         _ = try service.loadSnapshot()
 
-        XCTAssertEqual(installer.installedComponents, [.nvm])
+        XCTAssertEqual(installer.operations, ["install-nvm"])
+    }
+
+    func testLoadSnapshotAutoInstallsHomebrewThenNVMWhenBothMissing() throws {
+        let store = InMemoryStore(settings: AppSettings())
+        let installer = MockInstaller(homebrewInstalled: false)
+        let service = NodeEnvironmentService(
+            configStore: store,
+            detector: MockDetector(nvmInstalled: false, installations: [], activeVersion: nil, activeNodePath: nil),
+            javaDetector: MockJavaDetector(),
+            componentInstaller: installer,
+            shellRunner: MockShellRunner()
+        )
+
+        _ = try service.loadSnapshot()
+
+        XCTAssertEqual(installer.operations, ["install-homebrew", "install-nvm"])
     }
 
     func testLoadSnapshotDoesNotFailWhenAutomaticNVMInstallFails() throws {
@@ -203,7 +219,6 @@ final class NodeEnvironmentServiceTests: XCTestCase {
 
         XCTAssertEqual(snapshot.activeVersion, "24.1.0")
         XCTAssertEqual(snapshot.activeNodePath, "/usr/local/bin/node")
-        XCTAssertTrue(snapshot.componentAvailabilities.contains(where: { $0.component == .nvm && !$0.isInstalled }))
     }
 
     func testSelectDefaultNodeFailsWhenVersionNotInstalled() {
@@ -232,24 +247,46 @@ private struct MockJavaDetector: JavaRuntimeDetecting {
 }
 
 private final class MockInstaller: RuntimeComponentInstalling, @unchecked Sendable {
-    private(set) var installedComponents: [InstallableComponent] = []
+    private(set) var operations: [String] = []
+    private var homebrewInstalled: Bool
 
-    func canInstall(_ component: InstallableComponent) -> Bool {
-        true
+    init(homebrewInstalled: Bool = true) {
+        self.homebrewInstalled = homebrewInstalled
     }
 
-    func install(_ component: InstallableComponent) throws {
-        installedComponents.append(component)
+    func isHomebrewInstalled() -> Bool {
+        homebrewInstalled
+    }
+
+    func installHomebrew() throws {
+        operations.append("install-homebrew")
+        homebrewInstalled = true
+    }
+
+    func canInstallNVM() -> Bool {
+        homebrewInstalled
+    }
+
+    func installNVM() throws {
+        operations.append("install-nvm")
     }
 }
 
 private struct FailingInstaller: RuntimeComponentInstalling {
-    func canInstall(_ component: InstallableComponent) -> Bool {
-        true
+    func isHomebrewInstalled() -> Bool {
+        false
     }
 
-    func install(_ component: InstallableComponent) throws {
-        throw RuntimeComponentInstallerError.installFailed(component: component, message: "brew failed")
+    func installHomebrew() throws {
+        throw RuntimeComponentInstallerError.homebrewInstallFailed(message: "brew failed")
+    }
+
+    func canInstallNVM() -> Bool {
+        false
+    }
+
+    func installNVM() throws {
+        throw RuntimeComponentInstallerError.nvmInstallFailed(message: "nvm failed")
     }
 }
 

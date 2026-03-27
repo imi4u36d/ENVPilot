@@ -48,9 +48,10 @@ struct MenuBarContentView: View {
     }
 
     private var progressBanner: some View {
-        HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
             ProgressView()
                 .controlSize(.small)
+                .progressViewStyle(.linear)
             Text(store.loadingMessage ?? "正在处理...")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -188,7 +189,6 @@ struct SettingsView: View {
                     overviewSection
                     nodeSwitchSection
                     jdkSwitchSection
-                    installToolsSection
                     projectPreferenceSection
                     profileSelectionSection
                     profileEditorSection
@@ -243,8 +243,9 @@ struct SettingsView: View {
 
     private var progressBanner: some View {
         GroupBox {
-            HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 10) {
                 ProgressView()
+                    .progressViewStyle(.linear)
                 Text(store.loadingMessage ?? "正在处理...")
                     .foregroundStyle(.secondary)
             }
@@ -283,7 +284,7 @@ struct SettingsView: View {
     private var nodeSwitchSection: some View {
         GroupBox("Node（NVM）") {
             VStack(alignment: .leading, spacing: 12) {
-                Text("仅支持 NVM 管理 Node 版本。若本机没有 NVM，会尝试通过 Homebrew 自动安装。")
+                Text("仅支持 NVM 管理 Node 版本。启动时若未检测到 Homebrew，会先自动安装 Homebrew，再安装 NVM。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -371,45 +372,6 @@ struct SettingsView: View {
                 }
             } else {
                 Text("未发现本机 JDK。")
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var installToolsSection: some View {
-        GroupBox("组件安装") {
-            if let statuses = store.snapshot?.componentAvailabilities, !statuses.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(statuses) { status in
-                        HStack {
-                            Text(status.component.displayName)
-                            Spacer()
-                            if status.isInstalled {
-                                Text("已安装")
-                                    .foregroundStyle(.secondary)
-                            } else if status.isInstallSupported {
-                                if isInstalling(status.component) {
-                                    HStack(spacing: 6) {
-                                        ProgressView()
-                                            .controlSize(.small)
-                                        Text("下载安装中...")
-                                            .foregroundStyle(.secondary)
-                                    }
-                                } else {
-                                    Button("一键安装") {
-                                        Task { await store.installComponent(status.component) }
-                                    }
-                                    .disabled(store.isLoading)
-                                }
-                            } else {
-                                Text("当前环境不可安装")
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-            } else {
-                Text("暂无安装状态信息")
                     .foregroundStyle(.secondary)
             }
         }
@@ -539,13 +501,6 @@ struct SettingsView: View {
         } else if let first = availableProfiles.first {
             draftProfile = first
         }
-    }
-
-    private func isInstalling(_ component: InstallableComponent) -> Bool {
-        guard store.isLoading, let loadingMessage = store.loadingMessage else {
-            return false
-        }
-        return loadingMessage.contains(component.displayName)
     }
 
     private func isNodeSelected(item: NodeInstallation) -> Bool {

@@ -2,13 +2,12 @@ import Foundation
 import ENVPilotCore
 
 protocol NodeRuntimeServicing: Sendable {
-    func loadSnapshot() throws -> NodeRuntimeSnapshot
-    func setDefaultNode(version: String) throws
-    func installNode(version: String) throws
-    func uninstallNode(version: String) throws
+    func loadSnapshot(progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
+    func setDefaultNode(version: String, progress: (@Sendable (String) -> Void)?) throws
+    func installNode(version: String, progress: (@Sendable (String) -> Void)?) throws
+    func uninstallNode(version: String, progress: (@Sendable (String) -> Void)?) throws
     func setDefaultJava(version: String, homePath: String) throws
     func setSelectedProfile(id: UUID) throws
-    func installComponent(_ component: InstallableComponent) throws
     func saveProfile(_ profile: EnvironmentProfile) throws
     func createProfile(named name: String) throws -> UUID
     func setProjectVersionPreference(_ preference: ProjectVersionPreference) throws
@@ -29,20 +28,20 @@ struct LocalNodeRuntimeService: NodeRuntimeServicing {
         )
     }
 
-    func loadSnapshot() throws -> NodeRuntimeSnapshot {
-        try environmentService.loadSnapshot()
+    func loadSnapshot(progress: (@Sendable (String) -> Void)? = nil) throws -> NodeRuntimeSnapshot {
+        try environmentService.loadSnapshot(progress: progress)
     }
 
-    func setDefaultNode(version: String) throws {
-        _ = try environmentService.selectDefaultNode(version: version)
+    func setDefaultNode(version: String, progress: (@Sendable (String) -> Void)? = nil) throws {
+        _ = try environmentService.selectDefaultNode(version: version, progress: progress)
     }
 
-    func installNode(version: String) throws {
-        _ = try environmentService.installNode(version: version)
+    func installNode(version: String, progress: (@Sendable (String) -> Void)? = nil) throws {
+        _ = try environmentService.installNode(version: version, progress: progress)
     }
 
-    func uninstallNode(version: String) throws {
-        _ = try environmentService.uninstallNode(version: version)
+    func uninstallNode(version: String, progress: (@Sendable (String) -> Void)? = nil) throws {
+        _ = try environmentService.uninstallNode(version: version, progress: progress)
     }
 
     func setDefaultJava(version: String, homePath: String) throws {
@@ -51,10 +50,6 @@ struct LocalNodeRuntimeService: NodeRuntimeServicing {
 
     func setSelectedProfile(id: UUID) throws {
         _ = try environmentService.updateSelectedProfile(id)
-    }
-
-    func installComponent(_ component: InstallableComponent) throws {
-        _ = try environmentService.installComponent(component)
     }
 
     func saveProfile(_ profile: EnvironmentProfile) throws {

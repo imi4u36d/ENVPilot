@@ -1,37 +1,5 @@
 import Foundation
 
-public enum InstallableComponent: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
-    case nvm
-    case jdk21
-
-    public var id: String { rawValue }
-
-    public var displayName: String {
-        switch self {
-        case .nvm:
-            return "NVM"
-        case .jdk21:
-            return "JDK 21"
-        }
-    }
-}
-
-public struct ComponentAvailability: Identifiable, Hashable, Sendable {
-    public let component: InstallableComponent
-    public let isInstalled: Bool
-    public let isInstallSupported: Bool
-
-    public init(component: InstallableComponent, isInstalled: Bool, isInstallSupported: Bool) {
-        self.component = component
-        self.isInstalled = isInstalled
-        self.isInstallSupported = isInstallSupported
-    }
-
-    public var id: String {
-        component.id
-    }
-}
-
 public struct NodeInstallation: Identifiable, Codable, Hashable, Sendable {
     public let version: String
     public let installPath: String
@@ -147,7 +115,6 @@ public struct NodeRuntimeSnapshot: Sendable {
     public var javaInstallations: [JavaInstallation]
     public var activeJavaVersion: String?
     public var activeJavaHome: String?
-    public var componentAvailabilities: [ComponentAvailability]
     public var settings: AppSettings
 
     public init(
@@ -157,7 +124,6 @@ public struct NodeRuntimeSnapshot: Sendable {
         javaInstallations: [JavaInstallation] = [],
         activeJavaVersion: String? = nil,
         activeJavaHome: String? = nil,
-        componentAvailabilities: [ComponentAvailability] = [],
         settings: AppSettings
     ) {
         self.installations = installations
@@ -166,7 +132,6 @@ public struct NodeRuntimeSnapshot: Sendable {
         self.javaInstallations = javaInstallations
         self.activeJavaVersion = activeJavaVersion
         self.activeJavaHome = activeJavaHome
-        self.componentAvailabilities = componentAvailabilities
         self.settings = settings
     }
 }
