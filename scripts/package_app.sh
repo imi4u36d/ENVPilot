@@ -3,15 +3,21 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_CONFIG="${1:-release}"
+MODULE_CACHE_ROOT="${TMPDIR:-/tmp}/envpilot-swiftpm-cache"
 
 APP_NAME="ENVPilot"
 APP_BUNDLE="$ROOT_DIR/dist/${APP_NAME}.app"
+DMG_STAGE_DIR="$ROOT_DIR/dist/${APP_NAME}-dmg"
+DMG_PATH="$ROOT_DIR/dist/${APP_NAME}.dmg"
 BIN_DIR="$ROOT_DIR/.build/${BUILD_CONFIG}"
 APP_BIN="$BIN_DIR/ENVPilotApp"
 HELPER_BIN="$BIN_DIR/envpilot-helper"
 
 echo "Building ENVPilot ($BUILD_CONFIG)..."
 cd "$ROOT_DIR"
+mkdir -p "$MODULE_CACHE_ROOT"
+export SWIFTPM_MODULECACHE_OVERRIDE="$MODULE_CACHE_ROOT/swiftpm"
+export CLANG_MODULE_CACHE_PATH="$MODULE_CACHE_ROOT/clang"
 swift build -c "$BUILD_CONFIG" --product ENVPilotApp
 swift build -c "$BUILD_CONFIG" --product envpilot-helper
 
@@ -65,5 +71,18 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+rm -rf "$DMG_STAGE_DIR"
+mkdir -p "$DMG_STAGE_DIR"
+cp -R "$APP_BUNDLE" "$DMG_STAGE_DIR/${APP_NAME}.app"
+rm -f "$DMG_PATH"
+hdiutil create \
+  -volname "$APP_NAME" \
+  -srcfolder "$DMG_STAGE_DIR" \
+  -ov \
+  -format UDZO \
+  "$DMG_PATH" >/dev/null
+
 echo "Packaged app:"
 echo "  $APP_BUNDLE"
+echo "Packaged dmg:"
+echo "  $DMG_PATH"

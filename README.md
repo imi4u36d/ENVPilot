@@ -41,6 +41,7 @@ cd /Users/wangzhuo/tools/ENVPilot
 
 ```bash
 /Users/wangzhuo/tools/ENVPilot/dist/ENVPilot.app
+/Users/wangzhuo/tools/ENVPilot/dist/ENVPilot.dmg
 ```
 
 ## 本地一键安装（推荐）
