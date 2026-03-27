@@ -1,0 +1,69 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+BUILD_CONFIG="${1:-release}"
+
+APP_NAME="ENVPilot"
+APP_BUNDLE="$ROOT_DIR/dist/${APP_NAME}.app"
+BIN_DIR="$ROOT_DIR/.build/${BUILD_CONFIG}"
+APP_BIN="$BIN_DIR/ENVPilotApp"
+HELPER_BIN="$BIN_DIR/envpilot-helper"
+
+echo "Building ENVPilot ($BUILD_CONFIG)..."
+cd "$ROOT_DIR"
+swift build -c "$BUILD_CONFIG" --product ENVPilotApp
+swift build -c "$BUILD_CONFIG" --product envpilot-helper
+
+if [[ ! -x "$APP_BIN" ]]; then
+  echo "Missing app binary: $APP_BIN" >&2
+  exit 1
+fi
+
+if [[ ! -x "$HELPER_BIN" ]]; then
+  echo "Missing helper binary: $HELPER_BIN" >&2
+  exit 1
+fi
+
+rm -rf "$APP_BUNDLE"
+mkdir -p "$APP_BUNDLE/Contents/MacOS"
+mkdir -p "$APP_BUNDLE/Contents/Resources/bin"
+
+cp "$APP_BIN" "$APP_BUNDLE/Contents/MacOS/ENVPilotApp"
+cp "$HELPER_BIN" "$APP_BUNDLE/Contents/Resources/bin/envpilot-helper"
+chmod +x "$APP_BUNDLE/Contents/MacOS/ENVPilotApp"
+chmod +x "$APP_BUNDLE/Contents/Resources/bin/envpilot-helper"
+
+cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>ENVPilotApp</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.envpilot.app</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>ENVPilot</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+</dict>
+</plist>
+PLIST
+
+echo "Packaged app:"
+echo "  $APP_BUNDLE"

@@ -1,0 +1,197 @@
+import Foundation
+import ENVPilotCore
+
+@MainActor
+final class NodeRuntimeStore: ObservableObject {
+    @Published private(set) var snapshot: NodeRuntimeSnapshot?
+    @Published private(set) var isLoading = false
+    @Published private(set) var loadingMessage: String?
+    @Published var latestError: String?
+
+    private let service: any NodeRuntimeServicing
+
+    init(service: any NodeRuntimeServicing) {
+        self.service = service
+        Task { await refresh() }
+    }
+
+    var configuredNodeVersion: String {
+        snapshot?.settings.selectedVersion ?? "--"
+    }
+
+    var configuredNodeInstallation: NodeInstallation? {
+        guard let selectedVersion = snapshot?.settings.selectedVersion else {
+            return nil
+        }
+        return snapshot?.installations.first(where: { $0.version == selectedVersion })
+    }
+
+    var configuredNodeStatus: String {
+        guard snapshot?.settings.selectedVersion != nil else {
+            return "未配置"
+        }
+        if configuredNodeInstallation != nil {
+            return "已通过 NVM 检测到"
+        }
+        return "已配置，但未通过 NVM 检测到安装"
+    }
+
+    var displayNodeVersion: String {
+        snapshot?.activeVersion ?? snapshot?.settings.selectedVersion ?? "--"
+    }
+
+    var displayJavaVersion: String {
+        snapshot?.settings.selectedJavaVersion ?? snapshot?.activeJavaVersion ?? "--"
+    }
+
+    var displayNodePath: String {
+        if let installation = configuredNodeInstallation {
+            return installation.installPath
+        }
+        return snapshot?.activeNodePath ?? "--"
+    }
+
+    var menuBarTitle: String {
+        guard snapshot != nil else { return "ENVPilot" }
+        let node = displayNodeVersion
+        let java = displayJavaVersion
+
+        if java != "--" {
+            return "Node \(node) | JDK \(java)"
+        }
+        return "Node \(node)"
+    }
+
+    func refresh() async {
+        await runOperation(message: "正在刷新运行时信息...") { [self] in
+            try await self.runBackground { [service] in
+                try service.loadSnapshot()
+            }
+        } onError: { error in
+            "刷新失败：\(error.localizedDescription)"
+        }
+    }
+
+    func setDefaultNode(version: String) async {
+        await runOperation(message: "正在切换 Node \(version)...") { [self] in
+            try await self.runBackground { [service] in
+                try service.setDefaultNode(version: version)
+                return try service.loadSnapshot()
+            }
+        } onError: { error in
+            "设置 Node 版本失败：\(error.localizedDescription)"
+        }
+    }
+
+    func installNode(version: String) async {
+        await runOperation(message: "正在安装 Node \(version)...") { [self] in
+            try await self.runBackground { [service] in
+                try service.installNode(version: version)
+                return try service.loadSnapshot()
+            }
+        } onError: { error in
+            "安装 Node 版本失败：\(error.localizedDescription)"
+        }
+    }
+
+    func uninstallNode(version: String) async {
+        await runOperation(message: "正在卸载 Node \(version)...") { [self] in
+            try await self.runBackground { [service] in
+                try service.uninstallNode(version: version)
+                return try service.loadSnapshot()
+            }
+        } onError: { error in
+            "卸载 Node 版本失败：\(error.localizedDescription)"
+        }
+    }
+
+    func setDefaultJava(version: String, homePath: String) async {
+        await runOperation(message: "正在切换 JDK \(version)...") { [self] in
+            try await self.runBackground { [service] in
+                try service.setDefaultJava(version: version, homePath: homePath)
+                return try service.loadSnapshot()
+            }
+        } onError: { error in
+            "设置 JDK 版本失败：\(error.localizedDescription)"
+        }
+    }
+
+    func setSelectedProfile(id: UUID) async {
+        await runOperation(message: "正在切换环境配置...") { [self] in
+            try await self.runBackground { [service] in
+                try service.setSelectedProfile(id: id)
+                return try service.loadSnapshot()
+            }
+        } onError: { error in
+            "切换配置失败：\(error.localizedDescription)"
+        }
+    }
+
+    func installComponent(_ component: InstallableComponent) async {
+        await runOperation(message: "正在下载安装 \(component.displayName)...") { [self] in
+            try await self.runBackground { [service] in
+                try service.installComponent(component)
+                return try service.loadSnapshot()
+            }
+        } onError: { error in
+            "安装组件失败：\(error.localizedDescription)"
+        }
+    }
+
+    func saveProfile(_ profile: EnvironmentProfile) async {
+        await runOperation(message: "正在保存环境配置...") { [self] in
+            try await self.runBackground { [service] in
+                try service.saveProfile(profile)
+                return try service.loadSnapshot()
+            }
+        } onError: { error in
+            "保存配置失败：\(error.localizedDescription)"
+        }
+    }
+
+    func createProfile(named name: String) async {
+        await runOperation(message: "正在创建环境配置...") { [self] in
+            try await self.runBackground { [service] in
+                _ = try service.createProfile(named: name)
+                return try service.loadSnapshot()
+            }
+        } onError: { error in
+            "创建配置失败：\(error.localizedDescription)"
+        }
+    }
+
+    func setProjectVersionPreference(_ preference: ProjectVersionPreference) async {
+        await runOperation(message: "正在更新项目版本策略...") { [self] in
+            try await self.runBackground { [service] in
+                try service.setProjectVersionPreference(preference)
+                return try service.loadSnapshot()
+            }
+        } onError: { error in
+            "更新项目版本策略失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func runBackground<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+        try await Task.detached(priority: .userInitiated, operation: work).value
+    }
+
+    private func runOperation(
+        message: String,
+        _ operation: @escaping () async throws -> NodeRuntimeSnapshot,
+        onError: (Error) -> String
+    ) async {
+        isLoading = true
+        loadingMessage = message
+        defer {
+            isLoading = false
+            loadingMessage = nil
+        }
+
+        do {
+            snapshot = try await operation()
+            latestError = nil
+        } catch {
+            latestError = onError(error)
+        }
+    }
+}
