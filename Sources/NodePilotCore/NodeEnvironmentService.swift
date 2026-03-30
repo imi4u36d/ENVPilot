@@ -50,6 +50,13 @@ public final class NodeEnvironmentService: Sendable {
         )
         let activeJavaVersion = javaDetector.detectActiveVersion()
         let activeJavaHome = javaDetector.detectActiveJavaHome()
+        let sdkmanStatus = SDKMANRuntimeStatus(
+            isInstalled: componentInstaller.isSDKMANInstalled(),
+            canInstall: componentInstaller.canInstallSDKMAN(),
+            hasManagedJavaInstallations: javaInstallations.contains {
+                JavaRuntimeDetector.sdkmanJavaIdentifier(fromHomePath: $0.homePath) != nil
+            }
+        )
 
         return NodeRuntimeSnapshot(
             installations: installations,
@@ -58,6 +65,7 @@ public final class NodeEnvironmentService: Sendable {
             javaInstallations: javaInstallations,
             activeJavaVersion: activeJavaVersion,
             activeJavaHome: activeJavaHome,
+            sdkmanStatus: sdkmanStatus,
             settings: settings
         )
     }
@@ -172,11 +180,129 @@ public final class NodeEnvironmentService: Sendable {
             throw NodeEnvironmentServiceError.javaHomeNotInstalled(homePath)
         }
 
+        if let sdkmanIdentifier = JavaRuntimeDetector.sdkmanJavaIdentifier(fromHomePath: homePath) {
+            do {
+                try componentInstaller.setSDKMANDefaultJava(identifier: sdkmanIdentifier)
+            } catch {
+                throw NodeEnvironmentServiceError.sdkmanCommandFailed(message: error.localizedDescription)
+            }
+        }
+
         var settings = try configStore.load()
         settings.selectedJavaVersion = version
         settings.selectedJavaHome = homePath
         try configStore.save(settings)
         return try loadSnapshot()
+    }
+
+    @discardableResult
+    public func installSDKMAN() throws -> NodeRuntimeSnapshot {
+        try installSDKMAN(progress: nil)
+    }
+
+    @discardableResult
+    public func installSDKMAN(progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot {
+        if componentInstaller.isSDKMANInstalled() {
+            return try loadSnapshot(progress: progress)
+        }
+        guard componentInstaller.canInstallSDKMAN() else {
+            throw NodeEnvironmentServiceError.sdkmanUnavailable
+        }
+        do {
+            progress?("正在安装 SDKMAN...")
+            try componentInstaller.installSDKMAN()
+        } catch {
+            throw NodeEnvironmentServiceError.sdkmanCommandFailed(message: error.localizedDescription)
+        }
+        return try loadSnapshot(progress: progress)
+    }
+
+    @discardableResult
+    public func installJavaWithSDKMAN(identifier: String) throws -> NodeRuntimeSnapshot {
+        try installJavaWithSDKMAN(identifier: identifier, progress: nil)
+    }
+
+    @discardableResult
+    public func installJavaWithSDKMAN(
+        identifier: String,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeRuntimeSnapshot {
+        let normalizedIdentifier = try normalizeJavaIdentifierOrThrow(identifier)
+
+        if !componentInstaller.isSDKMANInstalled() {
+            _ = try installSDKMAN(progress: progress)
+        }
+
+        do {
+            progress?("正在通过 SDKMAN 安装 JDK \(normalizedIdentifier)...")
+            try componentInstaller.installJavaWithSDKMAN(identifier: normalizedIdentifier)
+            progress?("正在设置 SDKMAN 默认 JDK \(normalizedIdentifier)...")
+            try componentInstaller.setSDKMANDefaultJava(identifier: normalizedIdentifier)
+        } catch {
+            throw NodeEnvironmentServiceError.sdkmanCommandFailed(message: error.localizedDescription)
+        }
+
+        var snapshot = try loadSnapshot(progress: progress)
+        if let selectedJava = resolveSelectedJavaAfterSDKMANInstall(
+            identifier: normalizedIdentifier,
+            snapshot: snapshot
+        ) {
+            var settings = try configStore.load()
+            settings.selectedJavaVersion = selectedJava.version
+            settings.selectedJavaHome = selectedJava.homePath
+            try configStore.save(settings)
+            snapshot = try loadSnapshot(progress: progress)
+        }
+        return snapshot
+    }
+
+    public func listAvailableJavaCandidatesWithSDKMAN() throws -> [SDKMANJavaCandidate] {
+        guard componentInstaller.isSDKMANInstalled() else {
+            throw NodeEnvironmentServiceError.sdkmanUnavailable
+        }
+
+        do {
+            let installedIdentifiers = Set(
+                javaDetector.detectInstallations().compactMap {
+                    JavaRuntimeDetector.sdkmanJavaIdentifier(fromHomePath: $0.homePath)
+                }
+            )
+            return try componentInstaller.listAvailableJavaCandidatesWithSDKMAN().map { candidate in
+                var updated = candidate
+                updated.isInstalled = installedIdentifiers.contains(candidate.identifier)
+                return updated
+            }
+        } catch {
+            throw NodeEnvironmentServiceError.sdkmanCommandFailed(message: error.localizedDescription)
+        }
+    }
+
+    @discardableResult
+    public func uninstallJavaWithSDKMAN(
+        identifier: String,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeRuntimeSnapshot {
+        let normalizedIdentifier = try normalizeJavaIdentifierOrThrow(identifier)
+        guard componentInstaller.isSDKMANInstalled() else {
+            throw NodeEnvironmentServiceError.sdkmanUnavailable
+        }
+
+        do {
+            progress?("正在通过 SDKMAN 卸载 JDK \(normalizedIdentifier)...")
+            try componentInstaller.uninstallJavaWithSDKMAN(identifier: normalizedIdentifier)
+        } catch {
+            throw NodeEnvironmentServiceError.sdkmanCommandFailed(message: error.localizedDescription)
+        }
+
+        var settings = try configStore.load()
+        if let selectedJavaHome = settings.selectedJavaHome,
+           JavaRuntimeDetector.sdkmanJavaIdentifier(fromHomePath: selectedJavaHome) == normalizedIdentifier {
+            settings.selectedJavaHome = nil
+            settings.selectedJavaVersion = nil
+            try configStore.save(settings)
+        }
+
+        return try loadSnapshot(progress: progress)
     }
 
     func ensureNVMInstalledIfPossible(progress: (@Sendable (String) -> Void)?) throws {
@@ -250,6 +376,14 @@ public final class NodeEnvironmentService: Sendable {
         return compact
     }
 
+    func normalizeJavaIdentifierOrThrow(_ identifier: String) throws -> String {
+        let normalized = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            throw NodeEnvironmentServiceError.invalidJavaIdentifier(identifier)
+        }
+        return normalized
+    }
+
     func mergeDefaultSelection(
         installations: [NodeInstallation],
         selectedVersion: String?
@@ -292,6 +426,20 @@ public final class NodeEnvironmentService: Sendable {
         #endif
     }
 
+    func resolveSelectedJavaAfterSDKMANInstall(
+        identifier: String,
+        snapshot: NodeRuntimeSnapshot
+    ) -> JavaInstallation? {
+        if let activeHome = snapshot.activeJavaHome,
+           let active = snapshot.javaInstallations.first(where: { $0.homePath == activeHome }) {
+            return active
+        }
+
+        return snapshot.javaInstallations.first {
+            JavaRuntimeDetector.sdkmanJavaIdentifier(fromHomePath: $0.homePath) == identifier
+        }
+    }
+
     static func shellQuoted(_ value: String) -> String {
         "'\(value.replacingOccurrences(of: "'", with: "'\"'\"'"))'"
     }
@@ -331,15 +479,20 @@ public final class NodeEnvironmentService: Sendable {
 
 public enum NodeEnvironmentServiceError: Error, LocalizedError {
     case invalidVersion(String)
+    case invalidJavaIdentifier(String)
     case nvmUnavailable
     case nvmCommandFailed(message: String)
     case nodeVersionNotInstalled(String)
     case javaHomeNotInstalled(String)
+    case sdkmanUnavailable
+    case sdkmanCommandFailed(message: String)
 
     public var errorDescription: String? {
         switch self {
         case .invalidVersion(let version):
             return "Invalid Node version: \(version)"
+        case .invalidJavaIdentifier(let identifier):
+            return "Invalid Java identifier: \(identifier)"
         case .nvmUnavailable:
             return "NVM is not available."
         case .nvmCommandFailed(let message):
@@ -348,6 +501,10 @@ public enum NodeEnvironmentServiceError: Error, LocalizedError {
             return "Node \(version) is not installed in NVM."
         case .javaHomeNotInstalled(let homePath):
             return "JDK home is not installed: \(homePath)"
+        case .sdkmanUnavailable:
+            return "SDKMAN is not available."
+        case .sdkmanCommandFailed(let message):
+            return "SDKMAN command failed: \(message)"
         }
     }
 }

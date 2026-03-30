@@ -4,6 +4,7 @@ import ENVPilotCore
 @MainActor
 final class NodeRuntimeStore: ObservableObject {
     @Published private(set) var snapshot: NodeRuntimeSnapshot?
+    @Published private(set) var sdkmanJavaCandidates: [SDKMANJavaCandidate] = []
     @Published private(set) var isLoading = false
     @Published private(set) var loadingMessage: String?
     @Published var latestError: String?
@@ -42,6 +43,21 @@ final class NodeRuntimeStore: ObservableObject {
 
     var displayJavaVersion: String {
         snapshot?.settings.selectedJavaVersion ?? snapshot?.activeJavaVersion ?? "--"
+    }
+
+    var sdkmanStatus: SDKMANRuntimeStatus {
+        snapshot?.sdkmanStatus ?? .init()
+    }
+
+    var sdkmanStatusText: String {
+        let status = sdkmanStatus
+        if status.isInstalled {
+            return status.hasManagedJavaInstallations ? "已安装（检测到 SDKMAN 管理的 JDK）" : "已安装"
+        }
+        if status.canInstall {
+            return "未安装（可自动安装）"
+        }
+        return "未安装（当前环境不可自动安装）"
     }
 
     var displayNodePath: String {
@@ -118,6 +134,64 @@ final class NodeRuntimeStore: ObservableObject {
         } onError: { error in
             "设置 JDK 版本失败：\(error.localizedDescription)"
         }
+    }
+
+    func installSDKMAN() async {
+        let progress = makeProgressUpdater()
+        await runOperation(message: "正在安装 SDKMAN...") { [self] in
+            try await self.runBackground { [service] in
+                try service.installSDKMAN(progress: progress)
+                return try service.loadSnapshot(progress: progress)
+            }
+        } onError: { error in
+            "安装 SDKMAN 失败：\(error.localizedDescription)"
+        }
+    }
+
+    func installJavaWithSDKMAN(identifier: String) async {
+        let progress = makeProgressUpdater()
+        await runOperation(message: "正在通过 SDKMAN 安装 JDK \(identifier)...") { [self] in
+            try await self.runBackground { [service] in
+                try service.installJavaWithSDKMAN(identifier: identifier, progress: progress)
+                return try service.loadSnapshot(progress: progress)
+            }
+        } onError: { error in
+            "通过 SDKMAN 安装 JDK 失败：\(error.localizedDescription)"
+        }
+        if sdkmanStatus.isInstalled {
+            await querySDKMANJavaCandidates()
+        }
+    }
+
+    func querySDKMANJavaCandidates() async {
+        isLoading = true
+        loadingMessage = "正在查询 SDKMAN JDK 列表..."
+        defer {
+            isLoading = false
+            loadingMessage = nil
+        }
+
+        do {
+            sdkmanJavaCandidates = try await runBackground { [service] in
+                try service.listAvailableJavaCandidatesWithSDKMAN()
+            }
+            latestError = nil
+        } catch {
+            latestError = "查询 SDKMAN JDK 列表失败：\(error.localizedDescription)"
+        }
+    }
+
+    func uninstallJavaWithSDKMAN(identifier: String) async {
+        let progress = makeProgressUpdater()
+        await runOperation(message: "正在通过 SDKMAN 卸载 JDK \(identifier)...") { [self] in
+            try await self.runBackground { [service] in
+                try service.uninstallJavaWithSDKMAN(identifier: identifier, progress: progress)
+                return try service.loadSnapshot(progress: progress)
+            }
+        } onError: { error in
+            "通过 SDKMAN 卸载 JDK 失败：\(error.localizedDescription)"
+        }
+        await querySDKMANJavaCandidates()
     }
 
     func setSelectedProfile(id: UUID) async {

@@ -8,9 +8,14 @@ public protocol JavaRuntimeDetecting: Sendable {
 
 public struct JavaRuntimeDetector: JavaRuntimeDetecting, Sendable {
     private let shellRunner: any ShellCommandRunning
+    private let environment: [String: String]
 
-    public init(shellRunner: any ShellCommandRunning = ShellCommandRunner()) {
+    public init(
+        shellRunner: any ShellCommandRunning = ShellCommandRunner(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) {
         self.shellRunner = shellRunner
+        self.environment = environment
     }
 
     public func detectInstallations() -> [JavaInstallation] {
@@ -18,7 +23,7 @@ public struct JavaRuntimeDetector: JavaRuntimeDetecting, Sendable {
         let fromJavaHome = Self.parseInstallations(from: javaHomeOutput).map {
             JavaInstallation(version: $0.version, homePath: canonicalHomePath($0.homePath))
         }
-        let defaultHome = detectDefaultJavaHome().map(canonicalHomePath)
+        let defaultHome = detectPreferredDefaultJavaHome().map(canonicalHomePath)
         let parsedByPath = Dictionary(uniqueKeysWithValues: fromJavaHome.map { ($0.homePath, $0.version) })
 
         var allPaths = Set(fromJavaHome.map(\.homePath))
@@ -40,16 +45,27 @@ public struct JavaRuntimeDetector: JavaRuntimeDetecting, Sendable {
     }
 
     public func detectActiveVersion() -> String? {
+        if let activeJavaHome = detectActiveJavaHome(),
+           let version = versionFromJavaBinary(homePath: activeJavaHome) {
+            return version
+        }
         let output = runShellOutput("java -version 2>&1")
         return Self.parseJavaVersion(fromJavaVersionOutput: output)
     }
 
     public func detectActiveJavaHome() -> String? {
-        let envValue = ProcessInfo.processInfo.environment["JAVA_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let envValue = environment["JAVA_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let envValue, !envValue.isEmpty {
             return canonicalHomePath(envValue)
         }
+        if let sdkmanCurrent = detectSDKMANCurrentJavaHome() {
+            return canonicalHomePath(sdkmanCurrent)
+        }
         return detectDefaultJavaHome().map(canonicalHomePath)
+    }
+
+    private func detectPreferredDefaultJavaHome() -> String? {
+        detectSDKMANCurrentJavaHome() ?? detectDefaultJavaHome()
     }
 
     private func detectDefaultJavaHome() -> String? {
@@ -81,7 +97,43 @@ public struct JavaRuntimeDetector: JavaRuntimeDetecting, Sendable {
             homes.formUnion(jdkHomesInOpenJDKCellarRoot(cellarRoot, fileManager: fileManager))
         }
 
+        if let sdkmanRoot = sdkmanJavaCandidatesRoot() {
+            homes.formUnion(jdkHomesInSDKMANRoot(sdkmanRoot, fileManager: fileManager))
+        }
+
         return homes
+    }
+
+    private func sdkmanJavaCandidatesRoot() -> String? {
+        let candidatesDir = environment["SDKMAN_CANDIDATES_DIR"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let candidatesDir, !candidatesDir.isEmpty {
+            if candidatesDir.hasSuffix("/java") {
+                return (candidatesDir as NSString).expandingTildeInPath
+            }
+            return ((candidatesDir as NSString).expandingTildeInPath as NSString)
+                .appendingPathComponent("java")
+        }
+
+        let sdkmanDir = environment["SDKMAN_DIR"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let sdkmanDir, !sdkmanDir.isEmpty {
+            return (((sdkmanDir as NSString).expandingTildeInPath as NSString)
+                .appendingPathComponent("candidates") as NSString)
+                .appendingPathComponent("java")
+        }
+
+        return (NSHomeDirectory() as NSString)
+            .appendingPathComponent(".sdkman/candidates/java")
+    }
+
+    private func detectSDKMANCurrentJavaHome() -> String? {
+        let fileManager = FileManager.default
+        guard let root = sdkmanJavaCandidatesRoot() else {
+            return nil
+        }
+        let currentPath = (root as NSString).appendingPathComponent("current")
+        return isJavaHome(currentPath, fileManager: fileManager) ? currentPath : nil
     }
 
     private func jdkHomesInJVMRoot(_ root: String, fileManager: FileManager) -> Set<String> {
@@ -133,18 +185,38 @@ public struct JavaRuntimeDetector: JavaRuntimeDetecting, Sendable {
         return homes
     }
 
+    private func jdkHomesInSDKMANRoot(_ root: String, fileManager: FileManager) -> Set<String> {
+        var homes = Set<String>()
+        guard let entries = try? fileManager.contentsOfDirectory(atPath: root) else {
+            return homes
+        }
+
+        for entry in entries where entry != "current" && !entry.hasPrefix(".") {
+            let home = (root as NSString).appendingPathComponent(entry)
+            if isJavaHome(home, fileManager: fileManager) {
+                homes.insert(home)
+            }
+        }
+        return homes
+    }
+
+    private func isJavaHome(_ homePath: String, fileManager: FileManager) -> Bool {
+        let javaBin = (homePath as NSString).appendingPathComponent("bin/java")
+        return fileManager.isExecutableFile(atPath: javaBin)
+    }
+
     private func versionFromJavaBinary(homePath: String) -> String? {
         let fileManager = FileManager.default
-        let javaBin = homePath + "/bin/java"
-        guard fileManager.isExecutableFile(atPath: javaBin) else {
+        guard isJavaHome(homePath, fileManager: fileManager) else {
             return nil
         }
+        let javaBin = homePath + "/bin/java"
         let output = runShellOutput("\(Self.singleQuoted(javaBin)) -version 2>&1")
         return Self.parseJavaVersion(fromJavaVersionOutput: output)
     }
 
     private func runShellOutput(_ command: String) -> String {
-        guard let result = try? shellRunner.runShell(command, environment: ProcessInfo.processInfo.environment) else {
+        guard let result = try? shellRunner.runShell(command, environment: environment) else {
             return ""
         }
         if !result.standardOutput.isEmpty {
@@ -237,6 +309,18 @@ public struct JavaRuntimeDetector: JavaRuntimeDetecting, Sendable {
             }
         }
         return lhs > rhs
+    }
+
+    public static func sdkmanJavaIdentifier(fromHomePath homePath: String) -> String? {
+        let standardized = URL(fileURLWithPath: homePath).standardizedFileURL.path
+        guard let range = standardized.range(of: "/candidates/java/") else {
+            return nil
+        }
+        let remainder = standardized[range.upperBound...]
+        guard let candidate = remainder.split(separator: "/").first, !candidate.isEmpty else {
+            return nil
+        }
+        return String(candidate)
     }
 
     static func singleQuoted(_ value: String) -> String {

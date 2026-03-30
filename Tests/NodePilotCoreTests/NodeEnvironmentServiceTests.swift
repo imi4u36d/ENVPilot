@@ -221,6 +221,127 @@ final class NodeEnvironmentServiceTests: XCTestCase {
         XCTAssertEqual(snapshot.activeNodePath, "/usr/local/bin/node")
     }
 
+    func testLoadSnapshotIncludesSDKMANStatus() throws {
+        let store = InMemoryStore(settings: AppSettings())
+        let javaHome = "/Users/me/.sdkman/candidates/java/21.0.4-tem"
+        let installer = MockInstaller(sdkmanInstalled: false, canInstallSDKMAN: true)
+        let service = NodeEnvironmentService(
+            configStore: store,
+            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
+            javaDetector: MockJavaDetector(
+                installations: [JavaInstallation(version: "21.0.4", homePath: javaHome)],
+                activeVersion: "21.0.4",
+                activeJavaHome: javaHome
+            ),
+            componentInstaller: installer,
+            shellRunner: MockShellRunner()
+        )
+
+        let snapshot = try service.loadSnapshot()
+
+        XCTAssertEqual(snapshot.sdkmanStatus.isInstalled, false)
+        XCTAssertEqual(snapshot.sdkmanStatus.canInstall, true)
+        XCTAssertEqual(snapshot.sdkmanStatus.hasManagedJavaInstallations, true)
+    }
+
+    func testInstallJavaWithSDKMANAutoInstallsSDKMANAndPersistsSelectedJava() throws {
+        let store = InMemoryStore(settings: AppSettings())
+        let javaHome = "/Users/me/.sdkman/candidates/java/21.0.4-tem"
+        let installer = MockInstaller(sdkmanInstalled: false, canInstallSDKMAN: true)
+        let service = NodeEnvironmentService(
+            configStore: store,
+            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
+            javaDetector: MockJavaDetector(
+                installations: [JavaInstallation(version: "21.0.4", homePath: javaHome, isDefault: true)],
+                activeVersion: "21.0.4",
+                activeJavaHome: javaHome
+            ),
+            componentInstaller: installer,
+            shellRunner: MockShellRunner()
+        )
+
+        let snapshot = try service.installJavaWithSDKMAN(identifier: "21.0.4-tem")
+
+        XCTAssertEqual(installer.operations, [
+            "install-sdkman",
+            "install-sdkman-java:21.0.4-tem",
+            "sdkman-default-java:21.0.4-tem",
+        ])
+        XCTAssertEqual(snapshot.settings.selectedJavaVersion, "21.0.4")
+        XCTAssertEqual(snapshot.settings.selectedJavaHome, javaHome)
+    }
+
+    func testSelectDefaultJavaSyncsSDKMANDefaultWhenSDKMANHomeSelected() throws {
+        let store = InMemoryStore(settings: AppSettings())
+        let javaHome = "/Users/me/.sdkman/candidates/java/17.0.16-tem"
+        let installer = MockInstaller(sdkmanInstalled: true)
+        let service = NodeEnvironmentService(
+            configStore: store,
+            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
+            javaDetector: MockJavaDetector(
+                installations: [JavaInstallation(version: "17.0.16", homePath: javaHome)],
+                activeVersion: "17.0.16",
+                activeJavaHome: javaHome
+            ),
+            componentInstaller: installer,
+            shellRunner: MockShellRunner()
+        )
+
+        let snapshot = try service.selectDefaultJava(version: "17.0.16", homePath: javaHome)
+
+        XCTAssertTrue(installer.operations.contains("sdkman-default-java:17.0.16-tem"))
+        XCTAssertEqual(snapshot.settings.selectedJavaVersion, "17.0.16")
+        XCTAssertEqual(snapshot.settings.selectedJavaHome, javaHome)
+    }
+
+    func testListAvailableJavaCandidatesWithSDKMANMarksInstalledCandidates() throws {
+        let store = InMemoryStore(settings: AppSettings())
+        let javaHome = "/Users/me/.sdkman/candidates/java/17.0.16-tem"
+        let installer = MockInstaller(
+            sdkmanInstalled: true,
+            availableJavaCandidates: [
+                SDKMANJavaCandidate(vendor: "Temurin", version: "17.0.16", distribution: "tem", identifier: "17.0.16-tem"),
+                SDKMANJavaCandidate(vendor: "Zulu", version: "21.0.10", distribution: "zulu", identifier: "21.0.10-zulu"),
+            ]
+        )
+        let service = NodeEnvironmentService(
+            configStore: store,
+            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
+            javaDetector: MockJavaDetector(
+                installations: [JavaInstallation(version: "17.0.16", homePath: javaHome)],
+                activeVersion: "17.0.16",
+                activeJavaHome: javaHome
+            ),
+            componentInstaller: installer,
+            shellRunner: MockShellRunner()
+        )
+
+        let candidates = try service.listAvailableJavaCandidatesWithSDKMAN()
+
+        XCTAssertEqual(candidates.count, 2)
+        XCTAssertEqual(candidates[0].isInstalled, true)
+        XCTAssertEqual(candidates[1].isInstalled, false)
+    }
+
+    func testUninstallJavaWithSDKMANClearsSelectedJavaWhenRemovingSelectedIdentifier() throws {
+        let javaHome = "/Users/me/.sdkman/candidates/java/17.0.16-tem"
+        let store = InMemoryStore(settings: AppSettings(selectedJavaVersion: "17.0.16", selectedJavaHome: javaHome))
+        let installer = MockInstaller(sdkmanInstalled: true)
+        let service = NodeEnvironmentService(
+            configStore: store,
+            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
+            javaDetector: MockJavaDetector(),
+            componentInstaller: installer,
+            shellRunner: MockShellRunner()
+        )
+
+        let snapshot = try service.uninstallJavaWithSDKMAN(identifier: "17.0.16-tem", progress: nil)
+
+        XCTAssertTrue(installer.operations.contains("sdkman-uninstall-java:17.0.16-tem"))
+        XCTAssertNil(snapshot.settings.selectedJavaVersion)
+        XCTAssertNil(snapshot.settings.selectedJavaHome)
+    }
+
     func testSelectDefaultNodeFailsWhenVersionNotInstalled() {
         let store = InMemoryStore(settings: AppSettings())
         let service = NodeEnvironmentService(
@@ -241,17 +362,42 @@ final class NodeEnvironmentServiceTests: XCTestCase {
 }
 
 private struct MockJavaDetector: JavaRuntimeDetecting {
-    func detectInstallations() -> [JavaInstallation] { [] }
-    func detectActiveVersion() -> String? { nil }
-    func detectActiveJavaHome() -> String? { nil }
+    let installations: [JavaInstallation]
+    let activeVersion: String?
+    let activeJavaHome: String?
+
+    init(
+        installations: [JavaInstallation] = [],
+        activeVersion: String? = nil,
+        activeJavaHome: String? = nil
+    ) {
+        self.installations = installations
+        self.activeVersion = activeVersion
+        self.activeJavaHome = activeJavaHome
+    }
+
+    func detectInstallations() -> [JavaInstallation] { installations }
+    func detectActiveVersion() -> String? { activeVersion }
+    func detectActiveJavaHome() -> String? { activeJavaHome }
 }
 
 private final class MockInstaller: RuntimeComponentInstalling, @unchecked Sendable {
     private(set) var operations: [String] = []
     private var homebrewInstalled: Bool
+    private var sdkmanInstalled: Bool
+    private let canInstallSDKMANFlag: Bool
+    private let availableJavaCandidates: [SDKMANJavaCandidate]
 
-    init(homebrewInstalled: Bool = true) {
+    init(
+        homebrewInstalled: Bool = true,
+        sdkmanInstalled: Bool = true,
+        canInstallSDKMAN: Bool = true,
+        availableJavaCandidates: [SDKMANJavaCandidate] = []
+    ) {
         self.homebrewInstalled = homebrewInstalled
+        self.sdkmanInstalled = sdkmanInstalled
+        self.canInstallSDKMANFlag = canInstallSDKMAN
+        self.availableJavaCandidates = availableJavaCandidates
     }
 
     func isHomebrewInstalled() -> Bool {
@@ -270,6 +416,36 @@ private final class MockInstaller: RuntimeComponentInstalling, @unchecked Sendab
     func installNVM() throws {
         operations.append("install-nvm")
     }
+
+    func isSDKMANInstalled() -> Bool {
+        sdkmanInstalled
+    }
+
+    func canInstallSDKMAN() -> Bool {
+        canInstallSDKMANFlag
+    }
+
+    func installSDKMAN() throws {
+        operations.append("install-sdkman")
+        sdkmanInstalled = true
+    }
+
+    func listAvailableJavaCandidatesWithSDKMAN() throws -> [SDKMANJavaCandidate] {
+        operations.append("sdkman-list-java")
+        return availableJavaCandidates
+    }
+
+    func installJavaWithSDKMAN(identifier: String) throws {
+        operations.append("install-sdkman-java:\(identifier)")
+    }
+
+    func uninstallJavaWithSDKMAN(identifier: String) throws {
+        operations.append("sdkman-uninstall-java:\(identifier)")
+    }
+
+    func setSDKMANDefaultJava(identifier: String) throws {
+        operations.append("sdkman-default-java:\(identifier)")
+    }
 }
 
 private struct FailingInstaller: RuntimeComponentInstalling {
@@ -287,6 +463,34 @@ private struct FailingInstaller: RuntimeComponentInstalling {
 
     func installNVM() throws {
         throw RuntimeComponentInstallerError.nvmInstallFailed(message: "nvm failed")
+    }
+
+    func isSDKMANInstalled() -> Bool {
+        false
+    }
+
+    func canInstallSDKMAN() -> Bool {
+        false
+    }
+
+    func installSDKMAN() throws {
+        throw RuntimeComponentInstallerError.sdkmanInstallFailed(message: "sdkman failed")
+    }
+
+    func listAvailableJavaCandidatesWithSDKMAN() throws -> [SDKMANJavaCandidate] {
+        throw RuntimeComponentInstallerError.sdkmanListJavaFailed(message: "list failed")
+    }
+
+    func installJavaWithSDKMAN(identifier: String) throws {
+        throw RuntimeComponentInstallerError.sdkmanJavaInstallFailed(identifier: identifier, message: "java install failed")
+    }
+
+    func uninstallJavaWithSDKMAN(identifier: String) throws {
+        throw RuntimeComponentInstallerError.sdkmanJavaUninstallFailed(identifier: identifier, message: "java uninstall failed")
+    }
+
+    func setSDKMANDefaultJava(identifier: String) throws {
+        throw RuntimeComponentInstallerError.sdkmanSetDefaultFailed(identifier: identifier, message: "default failed")
     }
 }
 

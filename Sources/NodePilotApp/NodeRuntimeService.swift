@@ -6,6 +6,10 @@ protocol NodeRuntimeServicing: Sendable {
     func setDefaultNode(version: String, progress: (@Sendable (String) -> Void)?) throws
     func installNode(version: String, progress: (@Sendable (String) -> Void)?) throws
     func uninstallNode(version: String, progress: (@Sendable (String) -> Void)?) throws
+    func installSDKMAN(progress: (@Sendable (String) -> Void)?) throws
+    func listAvailableJavaCandidatesWithSDKMAN() throws -> [SDKMANJavaCandidate]
+    func installJavaWithSDKMAN(identifier: String, progress: (@Sendable (String) -> Void)?) throws
+    func uninstallJavaWithSDKMAN(identifier: String, progress: (@Sendable (String) -> Void)?) throws
     func setDefaultJava(version: String, homePath: String) throws
     func setSelectedProfile(id: UUID) throws
     func saveProfile(_ profile: EnvironmentProfile) throws
@@ -42,6 +46,22 @@ struct LocalNodeRuntimeService: NodeRuntimeServicing {
 
     func uninstallNode(version: String, progress: (@Sendable (String) -> Void)? = nil) throws {
         _ = try environmentService.uninstallNode(version: version, progress: progress)
+    }
+
+    func installSDKMAN(progress: (@Sendable (String) -> Void)? = nil) throws {
+        _ = try environmentService.installSDKMAN(progress: progress)
+    }
+
+    func listAvailableJavaCandidatesWithSDKMAN() throws -> [SDKMANJavaCandidate] {
+        try environmentService.listAvailableJavaCandidatesWithSDKMAN()
+    }
+
+    func installJavaWithSDKMAN(identifier: String, progress: (@Sendable (String) -> Void)? = nil) throws {
+        _ = try environmentService.installJavaWithSDKMAN(identifier: identifier, progress: progress)
+    }
+
+    func uninstallJavaWithSDKMAN(identifier: String, progress: (@Sendable (String) -> Void)? = nil) throws {
+        _ = try environmentService.uninstallJavaWithSDKMAN(identifier: identifier, progress: progress)
     }
 
     func setDefaultJava(version: String, homePath: String) throws {

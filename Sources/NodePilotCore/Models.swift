@@ -34,6 +34,48 @@ public struct JavaInstallation: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+public struct SDKMANRuntimeStatus: Codable, Hashable, Sendable {
+    public var isInstalled: Bool
+    public var canInstall: Bool
+    public var hasManagedJavaInstallations: Bool
+
+    public init(
+        isInstalled: Bool = false,
+        canInstall: Bool = false,
+        hasManagedJavaInstallations: Bool = false
+    ) {
+        self.isInstalled = isInstalled
+        self.canInstall = canInstall
+        self.hasManagedJavaInstallations = hasManagedJavaInstallations
+    }
+}
+
+public struct SDKMANJavaCandidate: Identifiable, Codable, Hashable, Sendable {
+    public var vendor: String
+    public var version: String
+    public var distribution: String
+    public var identifier: String
+    public var isInstalled: Bool
+
+    public init(
+        vendor: String,
+        version: String,
+        distribution: String,
+        identifier: String,
+        isInstalled: Bool = false
+    ) {
+        self.vendor = vendor
+        self.version = version
+        self.distribution = distribution
+        self.identifier = identifier
+        self.isInstalled = isInstalled
+    }
+
+    public var id: String {
+        identifier
+    }
+}
+
 public struct CustomEnvironmentVariable: Identifiable, Codable, Hashable, Sendable {
     public let id: UUID
     public var key: String
@@ -115,6 +157,7 @@ public struct NodeRuntimeSnapshot: Sendable {
     public var javaInstallations: [JavaInstallation]
     public var activeJavaVersion: String?
     public var activeJavaHome: String?
+    public var sdkmanStatus: SDKMANRuntimeStatus
     public var settings: AppSettings
 
     public init(
@@ -124,6 +167,7 @@ public struct NodeRuntimeSnapshot: Sendable {
         javaInstallations: [JavaInstallation] = [],
         activeJavaVersion: String? = nil,
         activeJavaHome: String? = nil,
+        sdkmanStatus: SDKMANRuntimeStatus = .init(),
         settings: AppSettings
     ) {
         self.installations = installations
@@ -132,6 +176,7 @@ public struct NodeRuntimeSnapshot: Sendable {
         self.javaInstallations = javaInstallations
         self.activeJavaVersion = activeJavaVersion
         self.activeJavaHome = activeJavaHome
+        self.sdkmanStatus = sdkmanStatus
         self.settings = settings
     }
 }

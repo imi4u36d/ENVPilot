@@ -37,6 +37,10 @@ struct ENVPilotCLI {
                 try runStatus(arguments: commandArguments)
             case "set-version":
                 try runSetVersion(arguments: commandArguments)
+            case "install-sdkman":
+                try runInstallSDKMAN()
+            case "sdk-install-jdk":
+                try runSDKInstallJDK(arguments: commandArguments)
             case "set-profile":
                 try runSetProfile(arguments: commandArguments)
             case "set-jdk":
@@ -74,6 +78,9 @@ struct ENVPilotCLI {
         print("selected_java_version=\(settings.selectedJavaVersion ?? "")")
         print("selected_java_home=\(settings.selectedJavaHome ?? "")")
         print("profiles_count=\(settings.profiles.count)")
+        print("sdkman_installed=\(snapshot.sdkmanStatus.isInstalled)")
+        print("sdkman_can_install=\(snapshot.sdkmanStatus.canInstall)")
+        print("sdkman_has_managed_jdks=\(snapshot.sdkmanStatus.hasManagedJavaInstallations)")
         print("detected_node_versions=\(snapshot.installations.map { "\($0.version):\($0.installPath)" }.joined(separator: ","))")
         print("detected_jdk_versions=\(snapshot.javaInstallations.map { "\($0.version):\($0.homePath)" }.joined(separator: ","))")
         print("active_node_version=\(snapshot.activeVersion ?? "")")
@@ -90,6 +97,21 @@ struct ENVPilotCLI {
 
         _ = try runtimeService.selectDefaultNode(version: version)
         print("switched default node to \(version) via nvm")
+    }
+
+    private func runInstallSDKMAN() throws {
+        _ = try runtimeService.installSDKMAN(progress: nil)
+        print("sdkman installed or already available")
+    }
+
+    private func runSDKInstallJDK(arguments: [String]) throws {
+        let positionals = positionalArguments(from: arguments)
+        guard let identifier = positionals.first else {
+            throw CLIError(description: "sdk-install-jdk requires <identifier>")
+        }
+        let snapshot = try runtimeService.installJavaWithSDKMAN(identifier: identifier, progress: nil)
+        let activeJava = snapshot.activeJavaVersion ?? snapshot.settings.selectedJavaVersion ?? identifier
+        print("installed jdk via sdkman: \(identifier), active java: \(activeJava)")
     }
 
     private func runSetProfile(arguments: [String]) throws {
@@ -217,6 +239,8 @@ struct ENVPilotCLI {
         Commands:
           status [--cwd <path>]
           set-version <version>
+          install-sdkman
+          sdk-install-jdk <identifier>
           set-profile <profile-name-or-id>
           set-jdk <version-or-home-path>
           activate [--cwd <path>]

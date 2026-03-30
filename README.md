@@ -15,7 +15,10 @@ ENVPilot 是一个 macOS 菜单栏工具，用于切换 Node / JDK 版本并管�
   - 启动时若未检测到 Homebrew，会先自动安装 Homebrew，再安装 NVM
   - 支持可视化安装 / 切换 / 卸载 Node 版本
   - 列表展示每个 Node 版本的安装路径
-- JDK 版本检测与切换（通过 `JAVA_HOME` 激活）
+- JDK 版本检测与切换（推荐使用 `SDKMAN!` 管理，通过 `JAVA_HOME` 激活）
+  - 支持在 App 内安装 `SDKMAN!`
+  - 支持手动输入 SDKMAN candidate id 安装 JDK
+  - 支持将 SDKMAN 管理的 JDK 设为默认版本
 - Profile 环境配置
   - `npm/pnpm/yarn registry`
   - `NODE_OPTIONS`
