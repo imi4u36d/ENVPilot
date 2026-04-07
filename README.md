@@ -27,28 +27,28 @@ ENVPilot 是一个 macOS 菜单栏工具，用于切换 Node / JDK 版本并管�
 ## 构建
 
 ```bash
-cd /Users/wangzhuo/tools/ENVPilot
+cd [你的项目路径]/ENVPilot
 swift build
 ```
 
 ## 打包 .app
 
 ```bash
-cd /Users/wangzhuo/tools/ENVPilot
+cd [你的项目路径]/ENVPilot
 ./scripts/package_app.sh release
 ```
 
 输出：
 
 ```bash
-/Users/wangzhuo/tools/ENVPilot/dist/ENVPilot.app
-/Users/wangzhuo/tools/ENVPilot/dist/ENVPilot.dmg
+[你的项目路径]/ENVPilot/dist/ENVPilot.app
+[你的项目路径]/ENVPilot/dist/ENVPilot.dmg
 ```
 
 ## 本地一键安装（推荐）
 
 ```bash
-cd /Users/wangzhuo/tools/ENVPilot
+cd [你的项目路径]/ENVPilot
 ./scripts/install_local.sh
 ```
 
@@ -61,7 +61,7 @@ cd /Users/wangzhuo/tools/ENVPilot
 ## 运行 App
 
 ```bash
-cd /Users/wangzhuo/tools/ENVPilot
+cd [你的项目路径]/ENVPilot
 swift run ENVPilotApp
 ```
 
@@ -97,12 +97,12 @@ envpilot-helper install-snippet [--helper-path <path>] [--format text|json]
 手动输出并安装 snippet：
 
 ```bash
-/Users/wangzhuo/tools/ENVPilot/.build/debug/envpilot-helper install-snippet --helper-path /Users/wangzhuo/tools/ENVPilot/.build/debug/envpilot-helper
+[你的项目路径]/ENVPilot/.build/debug/envpilot-helper install-snippet --helper-path [你的项目路径]/ENVPilot/.build/debug/envpilot-helper
 ```
 
 或者使用脚本：
 
 ```bash
-cd /Users/wangzhuo/tools/ENVPilot
-./scripts/install_zsh_integration.sh release /Users/wangzhuo/tools/ENVPilot/.build/release/envpilot-helper
+cd [你的项目路径]/ENVPilot
+./scripts/install_zsh_integration.sh release [你的项目路径]/ENVPilot/.build/release/envpilot-helper
 ```
