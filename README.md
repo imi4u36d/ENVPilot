@@ -68,12 +68,28 @@ swift run ENVPilotApp
 ## Helper 命令
 
 ```bash
-envpilot-helper status [--cwd <path>]
-envpilot-helper set-version <version>
-envpilot-helper set-jdk <version-or-home-path>
-envpilot-helper set-profile <profile-name-or-id>
-envpilot-helper activate [--cwd <path>]
-envpilot-helper install-snippet [--helper-path <path>]
+envpilot-helper status [--cwd <path>] [--format text|json] [--fields <k1,k2>] [--include-profile]
+envpilot-helper doctor [--format text|json] [--check <id>]
+envpilot-helper set-version <version> [--dry-run]
+envpilot-helper set-jdk <version-or-home-path> [--dry-run]
+envpilot-helper set-profile <profile-name-or-id> [--dry-run]
+envpilot-helper profile list [--format text|json]
+envpilot-helper profile get <profile-id|name> [--format text|json]
+envpilot-helper profile create <name> [--format text|json] [--select] [--dry-run]
+envpilot-helper profile select <profile-id|name> [--format text|json] [--dry-run]
+envpilot-helper profile delete <profile-id|name> [--force] [--dry-run]
+envpilot-helper profile rename <profile-id|name> <new-name> [--dry-run]
+envpilot-helper profile set <profile-id|name> [--npm-registry <url>] [--pnpm-registry <url>] [--yarn-registry <url>] [--node-options <value>] [--format text|json] [--dry-run]
+envpilot-helper profile var set <profile-id|name> <KEY> <VALUE> [--dry-run]
+envpilot-helper profile var unset <profile-id|name> <KEY> [--dry-run]
+envpilot-helper profile var list <profile-id|name> [--format text|json]
+envpilot-helper config get <project-version-preference|selected-version|selected-java-version|selected-java-home|selected-profile-id|selected-profile-name>
+envpilot-helper config set project-version-preference <globalDefault|followProjectFiles>
+envpilot-helper config set selected-version <version|none>
+envpilot-helper config set selected-profile <profile-id|name|none>
+envpilot-helper config set selected-java <version-or-home-path|none>
+envpilot-helper activate [--cwd <path>] [--format text|json]
+envpilot-helper install-snippet [--helper-path <path>] [--format text|json]
 ```
 
 ## zsh 集成

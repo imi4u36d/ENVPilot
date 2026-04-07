@@ -273,10 +273,11 @@ struct SettingsView: View {
     @State private var draftProfile = EnvironmentProfile(name: "")
     @State private var newProfileName = ""
     @State private var nodeVersionInput = ""
-    @State private var sdkmanJavaIdentifierInput = ""
     @State private var sdkmanSearchText = ""
+    @State private var isSDKMANSearchExpanded = false
     @State private var projectPreference: ProjectVersionPreference = .followProjectFiles
     @State private var isSynchronizing = false
+    @FocusState private var isSDKMANSearchFieldFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -503,13 +504,11 @@ struct SettingsView: View {
                                 }
                                 .buttonStyle(.bordered)
                                 .disabled(store.isLoading)
-                                if let sdkmanIdentifier = JavaRuntimeDetector.sdkmanJavaIdentifier(fromHomePath: jdk.homePath) {
-                                    Button("卸载") {
-                                        Task { await store.uninstallJavaWithSDKMAN(identifier: sdkmanIdentifier) }
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .disabled(store.isLoading)
+                                Button("卸载") {
+                                    Task { await store.uninstallJava(version: jdk.version, homePath: jdk.homePath) }
                                 }
+                                .buttonStyle(.bordered)
+                                .disabled(store.isLoading)
                             }
                             Text(jdk.homePath)
                                 .font(.caption)
@@ -523,7 +522,7 @@ struct SettingsView: View {
                 } else {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("未发现本机 JDK。")
-                        Text("可先安装 SDKMAN，再在上方输入 candidate id 安装 JDK。")
+                        Text("可先安装 SDKMAN，再通过上方模糊搜索安装 JDK。")
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -555,71 +554,79 @@ struct SettingsView: View {
                 }
             }
 
-            HStack(spacing: 10) {
-                TextField("输入 SDKMAN candidate id，如 21.0.4-tem、17.0.12-zulu", text: $sdkmanJavaIdentifierInput)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(store.isLoading)
-                Button("安装 JDK") {
-                    let identifier = trimmedSDKMANJavaIdentifier
-                    guard !identifier.isEmpty else {
-                        return
-                    }
-                    sdkmanJavaIdentifierInput = ""
-                    Task { await store.installJavaWithSDKMAN(identifier: identifier) }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(store.isLoading || trimmedSDKMANJavaIdentifier.isEmpty)
-            }
-
             if store.sdkmanStatus.isInstalled {
                 HStack(spacing: 10) {
-                    TextField("模糊查询 Java candidate，如 tem、17、zulu", text: $sdkmanSearchText)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(store.isLoading)
-                    Button("查询版本") {
-                        Task { await store.querySDKMANJavaCandidates() }
+                    Text("候选搜索")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(isSDKMANSearchExpanded ? "收起搜索" : "搜索候选") {
+                        if isSDKMANSearchExpanded {
+                            collapseSDKMANSearchPanel()
+                        } else {
+                            isSDKMANSearchExpanded = true
+                            isSDKMANSearchFieldFocused = true
+                        }
                     }
                     .buttonStyle(.bordered)
                     .disabled(store.isLoading)
                 }
 
-                if !store.sdkmanJavaCandidates.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(filteredSDKMANJavaCandidates.prefix(12)) { candidate in
-                            HStack(spacing: 8) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(candidate.identifier)
-                                        .font(.subheadline.weight(.medium))
-                                    Text("\(candidate.vendor) · \(candidate.version) · \(candidate.distribution)")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if candidate.isInstalled {
-                                    PilotBadge(text: "已安装", color: .green)
-                                }
-                                Button("安装") {
-                                    sdkmanJavaIdentifierInput = candidate.identifier
-                                    Task { await store.installJavaWithSDKMAN(identifier: candidate.identifier) }
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(store.isLoading || candidate.isInstalled)
-                            }
-                            .padding(10)
-                            .background(PilotPalette.cardBackground.opacity(0.72))
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                if isSDKMANSearchExpanded {
+                    HStack(spacing: 10) {
+                        TextField("模糊查询 Java candidate，如 tem、17、zulu", text: $sdkmanSearchText)
+                            .textFieldStyle(.roundedBorder)
+                            .disabled(store.isLoading)
+                            .focused($isSDKMANSearchFieldFocused)
+                        Button("查询版本") {
+                            Task { await store.querySDKMANJavaCandidates() }
                         }
-
-                        if filteredSDKMANJavaCandidates.count > 12 {
-                            Text("仅显示前 12 条结果，请继续缩小搜索范围。")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                        .buttonStyle(.bordered)
+                        .disabled(store.isLoading)
+                        Button("关闭") {
+                            collapseSDKMANSearchPanel()
                         }
+                        .buttonStyle(.bordered)
+                        .disabled(store.isLoading)
                     }
-                } else {
-                    Text("点击“查询版本”后可按 vendor、version、identifier 模糊过滤可安装 JDK。")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+
+                    if !store.sdkmanJavaCandidates.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(filteredSDKMANJavaCandidates.prefix(12)) { candidate in
+                                HStack(spacing: 8) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(candidate.identifier)
+                                            .font(.subheadline.weight(.medium))
+                                        Text("\(candidate.vendor) · \(candidate.version) · \(candidate.distribution)")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    if candidate.isInstalled {
+                                        PilotBadge(text: "已安装", color: .green)
+                                    }
+                                    Button("安装") {
+                                        Task { await store.installJavaWithSDKMAN(identifier: candidate.identifier) }
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .disabled(store.isLoading || candidate.isInstalled)
+                                }
+                                .padding(10)
+                                .background(PilotPalette.cardBackground.opacity(0.72))
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            }
+
+                            if filteredSDKMANJavaCandidates.count > 12 {
+                                Text("仅显示前 12 条结果，请继续缩小搜索范围。")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    } else {
+                        Text("点击“查询版本”后可按 vendor、version、identifier 模糊过滤可安装 JDK。")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
@@ -807,10 +814,6 @@ struct SettingsView: View {
         }
     }
 
-    private var trimmedSDKMANJavaIdentifier: String {
-        sdkmanJavaIdentifierInput.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     private var filteredSDKMANJavaCandidates: [SDKMANJavaCandidate] {
         let query = sdkmanSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else {
@@ -827,6 +830,13 @@ struct SettingsView: View {
             .lowercased()
             .contains(query)
         }
+    }
+
+    private func collapseSDKMANSearchPanel() {
+        isSDKMANSearchExpanded = false
+        isSDKMANSearchFieldFocused = false
+        sdkmanSearchText = ""
+        store.clearSDKMANJavaCandidates()
     }
 
     private func synchronizeFromSnapshot() {

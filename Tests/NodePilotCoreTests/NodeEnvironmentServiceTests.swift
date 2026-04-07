@@ -244,7 +244,7 @@ final class NodeEnvironmentServiceTests: XCTestCase {
         XCTAssertEqual(snapshot.sdkmanStatus.hasManagedJavaInstallations, true)
     }
 
-    func testInstallJavaWithSDKMANAutoInstallsSDKMANAndPersistsSelectedJava() throws {
+    func testInstallJavaWithSDKMANAutoInstallsSDKMANAndDoesNotSetDefault() throws {
         let store = InMemoryStore(settings: AppSettings())
         let javaHome = "/Users/me/.sdkman/candidates/java/21.0.4-tem"
         let installer = MockInstaller(sdkmanInstalled: false, canInstallSDKMAN: true)
@@ -265,10 +265,11 @@ final class NodeEnvironmentServiceTests: XCTestCase {
         XCTAssertEqual(installer.operations, [
             "install-sdkman",
             "install-sdkman-java:21.0.4-tem",
-            "sdkman-default-java:21.0.4-tem",
         ])
-        XCTAssertEqual(snapshot.settings.selectedJavaVersion, "21.0.4")
-        XCTAssertEqual(snapshot.settings.selectedJavaHome, javaHome)
+        XCTAssertNil(snapshot.settings.selectedJavaVersion)
+        XCTAssertNil(snapshot.settings.selectedJavaHome)
+        XCTAssertEqual(snapshot.activeJavaVersion, "21.0.4")
+        XCTAssertEqual(snapshot.activeJavaHome, javaHome)
     }
 
     func testSelectDefaultJavaSyncsSDKMANDefaultWhenSDKMANHomeSelected() throws {
@@ -340,6 +341,192 @@ final class NodeEnvironmentServiceTests: XCTestCase {
         XCTAssertTrue(installer.operations.contains("sdkman-uninstall-java:17.0.16-tem"))
         XCTAssertNil(snapshot.settings.selectedJavaVersion)
         XCTAssertNil(snapshot.settings.selectedJavaHome)
+    }
+
+    func testUninstallJavaWithSDKMANRetriesAfterSwitchingDefaultWhenTargetIsInUse() throws {
+        let targetHome = "/Users/me/.sdkman/candidates/java/11.0.25-tem"
+        let fallbackHome = "/Users/me/.sdkman/candidates/java/17.0.16-tem"
+        let store = InMemoryStore(settings: AppSettings(selectedJavaVersion: "11.0.25", selectedJavaHome: targetHome))
+        let installer = RetryingSDKMANInstaller(identifierToFailFirst: "11.0.25-tem")
+        let service = NodeEnvironmentService(
+            configStore: store,
+            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
+            javaDetector: MockJavaDetector(
+                installations: [
+                    JavaInstallation(version: "17.0.16", homePath: fallbackHome),
+                    JavaInstallation(version: "11.0.25", homePath: targetHome),
+                ],
+                activeVersion: "17.0.16",
+                activeJavaHome: fallbackHome
+            ),
+            componentInstaller: installer,
+            shellRunner: MockShellRunner()
+        )
+
+        let snapshot = try service.uninstallJavaWithSDKMAN(identifier: "11.0.25-tem", progress: nil)
+
+        XCTAssertEqual(
+            installer.operations,
+            [
+                "sdkman-uninstall-java:11.0.25-tem",
+                "sdkman-default-java:17.0.16-tem",
+                "sdkman-uninstall-java:11.0.25-tem",
+            ]
+        )
+        XCTAssertNil(snapshot.settings.selectedJavaVersion)
+        XCTAssertNil(snapshot.settings.selectedJavaHome)
+    }
+
+    func testUninstallJavaWithSDKMANForcesRemovalWhenCurrentVersionAndNoFallbackExists() throws {
+        let targetIdentifier = "11.0.30-tem"
+        let targetHome = "/Users/me/.sdkman/candidates/java/\(targetIdentifier)"
+        let store = InMemoryStore(settings: AppSettings(selectedJavaVersion: "11.0.30", selectedJavaHome: targetHome))
+        let installer = ForceHintSDKMANInstaller(
+            message: """
+            Override with --force, but leaves the candidate unusable!
+            java \(targetIdentifier) is the current version and should not be removed.
+            """
+        )
+        let shell = MockShellRunner(
+            outputsByCommandFragment: [
+                "sdk uninstall java '\(targetIdentifier)' --force": .init(
+                    standardOutput: "removed java \(targetIdentifier).",
+                    standardError: "",
+                    exitCode: 0
+                )
+            ]
+        )
+        let service = NodeEnvironmentService(
+            configStore: store,
+            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
+            javaDetector: MockJavaDetector(
+                installations: [JavaInstallation(version: "11.0.30", homePath: targetHome)],
+                activeVersion: "11.0.30",
+                activeJavaHome: targetHome
+            ),
+            componentInstaller: installer,
+            shellRunner: shell
+        )
+
+        let snapshot = try service.uninstallJavaWithSDKMAN(identifier: targetIdentifier, progress: nil)
+
+        XCTAssertEqual(installer.operations, ["sdkman-uninstall-java:\(targetIdentifier)"])
+        XCTAssertTrue(shell.commands.contains { $0.contains("sdk uninstall java '\(targetIdentifier)' --force") })
+        XCTAssertNil(snapshot.settings.selectedJavaVersion)
+        XCTAssertNil(snapshot.settings.selectedJavaHome)
+    }
+
+    func testUninstallJavaUsesSDKMANPathWhenJavaIsSDKMANManaged() throws {
+        let javaHome = "/Users/me/.sdkman/candidates/java/21.0.4-tem"
+        let store = InMemoryStore(settings: AppSettings(selectedJavaVersion: "21.0.4", selectedJavaHome: javaHome))
+        let installer = MockInstaller(sdkmanInstalled: true)
+        let service = NodeEnvironmentService(
+            configStore: store,
+            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
+            javaDetector: MockJavaDetector(
+                installations: [JavaInstallation(version: "21.0.4", homePath: javaHome)],
+                activeVersion: nil,
+                activeJavaHome: nil
+            ),
+            componentInstaller: installer,
+            shellRunner: MockShellRunner()
+        )
+
+        let snapshot = try service.uninstallJava(homePath: javaHome, progress: nil)
+
+        XCTAssertTrue(installer.operations.contains("sdkman-uninstall-java:21.0.4-tem"))
+        XCTAssertNil(snapshot.settings.selectedJavaVersion)
+        XCTAssertNil(snapshot.settings.selectedJavaHome)
+    }
+
+    func testUninstallJavaRemovesNonSDKMANJDKBundleAndClearsSelection() throws {
+        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let jdkBundle = tempRoot.appendingPathComponent("temurin-21.jdk", isDirectory: true)
+        let javaHome = jdkBundle.appendingPathComponent("Contents/Home", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+        try FileManager.default.createDirectory(at: javaHome, withIntermediateDirectories: true)
+
+        let javaHomePath = javaHome.path
+        let store = InMemoryStore(settings: AppSettings(selectedJavaVersion: "21.0.4", selectedJavaHome: javaHomePath))
+        let service = NodeEnvironmentService(
+            configStore: store,
+            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
+            javaDetector: MockJavaDetector(
+                installations: [JavaInstallation(version: "21.0.4", homePath: javaHomePath)],
+                activeVersion: nil,
+                activeJavaHome: nil
+            ),
+            componentInstaller: MockInstaller(),
+            shellRunner: MockShellRunner()
+        )
+
+        let snapshot = try service.uninstallJava(homePath: javaHomePath, progress: nil)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: jdkBundle.path))
+        XCTAssertNil(snapshot.settings.selectedJavaVersion)
+        XCTAssertNil(snapshot.settings.selectedJavaHome)
+    }
+
+    func testUninstallJavaFailsForUnsupportedNonSDKMANLocation() {
+        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let javaHomeURL = tempRoot.appendingPathComponent("custom-jdk/Contents/Home", isDirectory: true)
+        try? FileManager.default.createDirectory(at: javaHomeURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let javaHome = javaHomeURL.path
+        let store = InMemoryStore(settings: AppSettings(selectedJavaVersion: "1.6.0", selectedJavaHome: javaHome))
+        let service = NodeEnvironmentService(
+            configStore: store,
+            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
+            javaDetector: MockJavaDetector(
+                installations: [JavaInstallation(version: "1.6.0", homePath: javaHome)],
+                activeVersion: nil,
+                activeJavaHome: nil
+            ),
+            componentInstaller: MockInstaller(),
+            shellRunner: MockShellRunner()
+        )
+
+        XCTAssertThrowsError(try service.uninstallJava(homePath: javaHome, progress: nil)) { error in
+            guard case NodeEnvironmentServiceError.javaUninstallUnsupported(let path) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertEqual(path, javaHome)
+        }
+    }
+
+    func testShouldUsePrivilegedJavaRemovalOnlyForSystemJDKPath() {
+        let service = NodeEnvironmentService(
+            configStore: InMemoryStore(settings: AppSettings()),
+            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
+            javaDetector: MockJavaDetector(),
+            componentInstaller: MockInstaller(),
+            shellRunner: MockShellRunner()
+        )
+
+        XCTAssertTrue(service.shouldUsePrivilegedJavaRemoval(path: "/Library/Java/JavaVirtualMachines/jdk-17.jdk"))
+        XCTAssertFalse(service.shouldUsePrivilegedJavaRemoval(path: "/Users/me/.jdks/jdk-17.jdk"))
+    }
+
+    func testRunPrivilegedJavaUninstallUsesOsaScriptWithAdminPrivileges() throws {
+        let shell = MockShellRunner(
+            outputsByRunCommandFragment: [
+                "/usr/bin/osascript -e": .init(standardOutput: "", standardError: "", exitCode: 0)
+            ]
+        )
+        let service = NodeEnvironmentService(
+            configStore: InMemoryStore(settings: AppSettings()),
+            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
+            javaDetector: MockJavaDetector(),
+            componentInstaller: MockInstaller(),
+            shellRunner: shell
+        )
+
+        try service.runPrivilegedJavaUninstall(path: "/Library/Java/JavaVirtualMachines/jdk-17.jdk")
+
+        XCTAssertTrue(shell.executedLaunchCommands.contains { $0.contains("/usr/bin/osascript -e") })
+        XCTAssertTrue(shell.executedLaunchCommands.contains { $0.contains("with administrator privileges") })
+        XCTAssertTrue(shell.executedLaunchCommands.contains { $0.contains("/bin/rm -rf '/Library/Java/JavaVirtualMachines/jdk-17.jdk'") })
     }
 
     func testSelectDefaultNodeFailsWhenVersionNotInstalled() {
@@ -441,6 +628,72 @@ private final class MockInstaller: RuntimeComponentInstalling, @unchecked Sendab
 
     func uninstallJavaWithSDKMAN(identifier: String) throws {
         operations.append("sdkman-uninstall-java:\(identifier)")
+    }
+
+    func setSDKMANDefaultJava(identifier: String) throws {
+        operations.append("sdkman-default-java:\(identifier)")
+    }
+}
+
+private final class RetryingSDKMANInstaller: RuntimeComponentInstalling, @unchecked Sendable {
+    private(set) var operations: [String] = []
+    private let identifierToFailFirst: String
+    private var failedOnce = false
+
+    init(identifierToFailFirst: String) {
+        self.identifierToFailFirst = identifierToFailFirst
+    }
+
+    func isHomebrewInstalled() -> Bool { true }
+    func installHomebrew() throws {}
+    func canInstallNVM() -> Bool { true }
+    func installNVM() throws {}
+    func isSDKMANInstalled() -> Bool { true }
+    func canInstallSDKMAN() -> Bool { true }
+    func installSDKMAN() throws {}
+    func listAvailableJavaCandidatesWithSDKMAN() throws -> [SDKMANJavaCandidate] { [] }
+    func installJavaWithSDKMAN(identifier: String) throws {}
+
+    func uninstallJavaWithSDKMAN(identifier: String) throws {
+        operations.append("sdkman-uninstall-java:\(identifier)")
+        if identifier == identifierToFailFirst, !failedOnce {
+            failedOnce = true
+            throw RuntimeComponentInstallerError.sdkmanJavaUninstallFailed(
+                identifier: identifier,
+                message: "Cannot uninstall: java \(identifier) is currently in use."
+            )
+        }
+    }
+
+    func setSDKMANDefaultJava(identifier: String) throws {
+        operations.append("sdkman-default-java:\(identifier)")
+    }
+}
+
+private final class ForceHintSDKMANInstaller: RuntimeComponentInstalling, @unchecked Sendable {
+    private(set) var operations: [String] = []
+    private let message: String
+
+    init(message: String) {
+        self.message = message
+    }
+
+    func isHomebrewInstalled() -> Bool { true }
+    func installHomebrew() throws {}
+    func canInstallNVM() -> Bool { true }
+    func installNVM() throws {}
+    func isSDKMANInstalled() -> Bool { true }
+    func canInstallSDKMAN() -> Bool { true }
+    func installSDKMAN() throws {}
+    func listAvailableJavaCandidatesWithSDKMAN() throws -> [SDKMANJavaCandidate] { [] }
+    func installJavaWithSDKMAN(identifier: String) throws {}
+
+    func uninstallJavaWithSDKMAN(identifier: String) throws {
+        operations.append("sdkman-uninstall-java:\(identifier)")
+        throw RuntimeComponentInstallerError.sdkmanJavaUninstallFailed(
+            identifier: identifier,
+            message: message
+        )
     }
 
     func setSDKMANDefaultJava(identifier: String) throws {

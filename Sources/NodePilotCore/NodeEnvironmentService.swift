@@ -236,24 +236,11 @@ public final class NodeEnvironmentService: Sendable {
         do {
             progress?("正在通过 SDKMAN 安装 JDK \(normalizedIdentifier)...")
             try componentInstaller.installJavaWithSDKMAN(identifier: normalizedIdentifier)
-            progress?("正在设置 SDKMAN 默认 JDK \(normalizedIdentifier)...")
-            try componentInstaller.setSDKMANDefaultJava(identifier: normalizedIdentifier)
         } catch {
             throw NodeEnvironmentServiceError.sdkmanCommandFailed(message: error.localizedDescription)
         }
 
-        var snapshot = try loadSnapshot(progress: progress)
-        if let selectedJava = resolveSelectedJavaAfterSDKMANInstall(
-            identifier: normalizedIdentifier,
-            snapshot: snapshot
-        ) {
-            var settings = try configStore.load()
-            settings.selectedJavaVersion = selectedJava.version
-            settings.selectedJavaHome = selectedJava.homePath
-            try configStore.save(settings)
-            snapshot = try loadSnapshot(progress: progress)
-        }
-        return snapshot
+        return try loadSnapshot(progress: progress)
     }
 
     public func listAvailableJavaCandidatesWithSDKMAN() throws -> [SDKMANJavaCandidate] {
@@ -278,6 +265,60 @@ public final class NodeEnvironmentService: Sendable {
     }
 
     @discardableResult
+    public func uninstallJava(
+        homePath: String,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeRuntimeSnapshot {
+        let normalizedHomePath = homePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedHomePath.isEmpty else {
+            throw NodeEnvironmentServiceError.javaHomeNotInstalled(homePath)
+        }
+
+        let installations = javaDetector.detectInstallations()
+        guard installations.contains(where: { $0.homePath == normalizedHomePath }) else {
+            throw NodeEnvironmentServiceError.javaHomeNotInstalled(normalizedHomePath)
+        }
+
+        if let sdkmanIdentifier = JavaRuntimeDetector.sdkmanJavaIdentifier(fromHomePath: normalizedHomePath) {
+            return try uninstallJavaWithSDKMAN(identifier: sdkmanIdentifier, progress: progress)
+        }
+
+        progress?("正在卸载 JDK \(normalizedHomePath)...")
+        do {
+            let removalTarget = try removalTargetForNonSDKMANJava(homePath: normalizedHomePath)
+            let fileManager = FileManager.default
+            guard fileManager.fileExists(atPath: removalTarget.path) else {
+                throw NodeEnvironmentServiceError.javaHomeNotInstalled(normalizedHomePath)
+            }
+            do {
+                try fileManager.removeItem(at: removalTarget)
+            } catch {
+                guard shouldUsePrivilegedJavaRemoval(path: removalTarget.path) else {
+                    throw error
+                }
+                progress?("检测到系统目录 JDK，正在请求管理员权限卸载...")
+                try runPrivilegedJavaUninstall(path: removalTarget.path)
+            }
+        } catch let error as NodeEnvironmentServiceError {
+            throw error
+        } catch {
+            throw NodeEnvironmentServiceError.javaUninstallFailed(
+                path: normalizedHomePath,
+                message: error.localizedDescription
+            )
+        }
+
+        var settings = try configStore.load()
+        if settings.selectedJavaHome == normalizedHomePath {
+            settings.selectedJavaHome = nil
+            settings.selectedJavaVersion = nil
+            try configStore.save(settings)
+        }
+
+        return try loadSnapshot(progress: progress)
+    }
+
+    @discardableResult
     public func uninstallJavaWithSDKMAN(
         identifier: String,
         progress: (@Sendable (String) -> Void)?
@@ -291,7 +332,19 @@ public final class NodeEnvironmentService: Sendable {
             progress?("正在通过 SDKMAN 卸载 JDK \(normalizedIdentifier)...")
             try componentInstaller.uninstallJavaWithSDKMAN(identifier: normalizedIdentifier)
         } catch {
-            throw NodeEnvironmentServiceError.sdkmanCommandFailed(message: error.localizedDescription)
+            let errorMessage = error.localizedDescription
+            if shouldRetrySDKMANUninstallBySwitchingDefault(message: errorMessage),
+               try retrySDKMANUninstallAfterSwitchingDefault(
+                    identifier: normalizedIdentifier,
+                    progress: progress
+               ) {
+                // Uninstall succeeded after switching SDKMAN default Java.
+            } else if shouldForceSDKMANUninstall(message: errorMessage) {
+                progress?("SDKMAN 报告目标为当前版本，按提示尝试 --force 卸载 \(normalizedIdentifier)...")
+                try runSDKMANForceUninstall(identifier: normalizedIdentifier)
+            } else {
+                throw NodeEnvironmentServiceError.sdkmanCommandFailed(message: errorMessage)
+            }
         }
 
         var settings = try configStore.load()
@@ -440,8 +493,119 @@ public final class NodeEnvironmentService: Sendable {
         }
     }
 
+    func shouldRetrySDKMANUninstallBySwitchingDefault(message: String) -> Bool {
+        let normalized = message.lowercased()
+        return normalized.contains("in use")
+            || normalized.contains("currently in use")
+            || normalized.contains("is current")
+            || normalized.contains("is default")
+            || normalized.contains("cannot uninstall")
+    }
+
+    func shouldForceSDKMANUninstall(message: String) -> Bool {
+        let normalized = message.lowercased()
+        return normalized.contains("override with --force")
+            || normalized.contains("should not be removed")
+            || normalized.contains("current version")
+            || normalized.contains("is the current")
+            || normalized.contains("is current")
+    }
+
+    func retrySDKMANUninstallAfterSwitchingDefault(
+        identifier: String,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> Bool {
+        let fallbackIdentifier = javaDetector.detectInstallations()
+            .compactMap { JavaRuntimeDetector.sdkmanJavaIdentifier(fromHomePath: $0.homePath) }
+            .first { $0 != identifier }
+
+        guard let fallbackIdentifier else {
+            return false
+        }
+
+        do {
+            progress?("检测到目标版本可能为 SDKMAN 当前默认，尝试切换默认到 \(fallbackIdentifier)...")
+            try componentInstaller.setSDKMANDefaultJava(identifier: fallbackIdentifier)
+            progress?("正在重试卸载 SDKMAN JDK \(identifier)...")
+            try componentInstaller.uninstallJavaWithSDKMAN(identifier: identifier)
+            return true
+        } catch {
+            throw NodeEnvironmentServiceError.sdkmanCommandFailed(message: error.localizedDescription)
+        }
+    }
+
+    func runSDKMANForceUninstall(identifier: String) throws {
+        let command = RuntimeComponentInstaller.sdkmanBootstrap(
+            "sdk uninstall java \(Self.shellQuoted(identifier)) --force"
+        )
+        let result = try shellRunner.runShell(
+            command,
+            environment: ProcessInfo.processInfo.environment
+        )
+        guard result.succeeded else {
+            throw NodeEnvironmentServiceError.sdkmanCommandFailed(message: Self.preferErrorOutput(result))
+        }
+    }
+
+    func shouldUsePrivilegedJavaRemoval(path: String) -> Bool {
+        path.hasPrefix("/Library/Java/JavaVirtualMachines/")
+    }
+
+    func runPrivilegedJavaUninstall(path: String) throws {
+        let removeCommand = "/bin/rm -rf \(Self.shellQuoted(path))"
+        let appleScript = "do shell script \"\(Self.escapeForAppleScript(removeCommand))\" with administrator privileges"
+        let result = try shellRunner.run(
+            "/usr/bin/osascript",
+            arguments: ["-e", appleScript],
+            environment: ProcessInfo.processInfo.environment
+        )
+        guard result.succeeded else {
+            throw NodeEnvironmentServiceError.javaUninstallFailed(
+                path: path,
+                message: Self.preferErrorOutput(result)
+            )
+        }
+    }
+
+    func removalTargetForNonSDKMANJava(homePath: String) throws -> URL {
+        let homeURL = URL(fileURLWithPath: homePath).standardizedFileURL
+        let path = homeURL.path
+
+        if path.contains("/Cellar/openjdk"),
+           let cellarRange = path.range(of: #"/(opt/homebrew|usr/local)/Cellar/openjdk[^/]*/[^/]+"#, options: .regularExpression) {
+            return URL(fileURLWithPath: String(path[cellarRange]), isDirectory: true)
+        }
+
+        if path.hasSuffix("/Contents/Home") {
+            let bundleURL = homeURL.deletingLastPathComponent().deletingLastPathComponent()
+            if bundleURL.path.hasSuffix(".jdk") {
+                return bundleURL
+            }
+        }
+
+        let userHomePrefix = NSHomeDirectory() + "/"
+        if path.hasPrefix(userHomePrefix) {
+            return homeURL
+        }
+
+        if path.hasPrefix("/Library/Java/JavaVirtualMachines/") && path.hasSuffix("/Contents/Home") {
+            let bundleURL = homeURL.deletingLastPathComponent().deletingLastPathComponent()
+            if bundleURL.path.hasSuffix(".jdk") {
+                return bundleURL
+            }
+        }
+
+        throw NodeEnvironmentServiceError.javaUninstallUnsupported(path)
+    }
+
     static func shellQuoted(_ value: String) -> String {
         "'\(value.replacingOccurrences(of: "'", with: "'\"'\"'"))'"
+    }
+
+    static func escapeForAppleScript(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     static func preferErrorOutput(_ result: ShellCommandResult) -> String {
@@ -484,6 +648,8 @@ public enum NodeEnvironmentServiceError: Error, LocalizedError {
     case nvmCommandFailed(message: String)
     case nodeVersionNotInstalled(String)
     case javaHomeNotInstalled(String)
+    case javaUninstallUnsupported(String)
+    case javaUninstallFailed(path: String, message: String)
     case sdkmanUnavailable
     case sdkmanCommandFailed(message: String)
 
@@ -501,6 +667,10 @@ public enum NodeEnvironmentServiceError: Error, LocalizedError {
             return "Node \(version) is not installed in NVM."
         case .javaHomeNotInstalled(let homePath):
             return "JDK home is not installed: \(homePath)"
+        case .javaUninstallUnsupported(let path):
+            return "Uninstall for this JDK path is not supported automatically: \(path)"
+        case .javaUninstallFailed(let path, let message):
+            return "Failed to uninstall JDK at \(path): \(message)"
         case .sdkmanUnavailable:
             return "SDKMAN is not available."
         case .sdkmanCommandFailed(let message):

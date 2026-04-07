@@ -34,8 +34,8 @@ public struct ProjectNodeVersionResolver {
                 let contents = try? String(contentsOf: fileURL, encoding: .utf8),
                 let version = contents
                     .split(whereSeparator: \.isNewline)
-                    .first?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                    .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+                    .first(where: { !$0.isEmpty && !$0.hasPrefix("#") }),
                 !version.isEmpty
             else {
                 continue

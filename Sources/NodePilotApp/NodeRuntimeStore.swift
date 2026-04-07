@@ -181,6 +181,10 @@ final class NodeRuntimeStore: ObservableObject {
         }
     }
 
+    func clearSDKMANJavaCandidates() {
+        sdkmanJavaCandidates = []
+    }
+
     func uninstallJavaWithSDKMAN(identifier: String) async {
         let progress = makeProgressUpdater()
         await runOperation(message: "正在通过 SDKMAN 卸载 JDK \(identifier)...") { [self] in
@@ -190,6 +194,19 @@ final class NodeRuntimeStore: ObservableObject {
             }
         } onError: { error in
             "通过 SDKMAN 卸载 JDK 失败：\(error.localizedDescription)"
+        }
+        await querySDKMANJavaCandidates()
+    }
+
+    func uninstallJava(version: String, homePath: String) async {
+        let progress = makeProgressUpdater()
+        await runOperation(message: "正在卸载 JDK \(version)...") { [self] in
+            try await self.runBackground { [service] in
+                try service.uninstallJava(homePath: homePath, progress: progress)
+                return try service.loadSnapshot(progress: progress)
+            }
+        } onError: { error in
+            "卸载 JDK 失败：\(error.localizedDescription)"
         }
         await querySDKMANJavaCandidates()
     }

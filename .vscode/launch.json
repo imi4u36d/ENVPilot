@@ -1,0 +1,44 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:ENVPilot}",
+            "name": "Debug ENVPilotApp",
+            "target": "ENVPilotApp",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug ENVPilotApp"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:ENVPilot}",
+            "name": "Release ENVPilotApp",
+            "target": "ENVPilotApp",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release ENVPilotApp"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:ENVPilot}",
+            "name": "Debug envpilot-helper",
+            "target": "envpilot-helper",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug envpilot-helper"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:ENVPilot}",
+            "name": "Release envpilot-helper",
+            "target": "envpilot-helper",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release envpilot-helper"
+        }
+    ]
+}
