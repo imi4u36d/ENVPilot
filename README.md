@@ -6,7 +6,7 @@
 
 ENVPilot 是一个 macOS 菜单栏工具，用于切换 Node / JDK 版本并管理环境配置。
 
-![ENVPilot Preview](./docs/preview.svg)
+![alt text](image.png)
 
 ## 功能
 
