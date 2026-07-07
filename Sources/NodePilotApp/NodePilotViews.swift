@@ -172,7 +172,13 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationSplitView {
-            SettingsSidebar(selection: $selectedSection)
+            List(SettingsSection.allCases, selection: $selectedSection) { section in
+                Label(section.title, systemImage: section.systemImage)
+                    .tag(section)
+            }
+            .navigationTitle("ENVPilot")
+            .scrollContentBackground(.hidden)
+            .navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 220)
         } detail: {
             ZStack {
                 LiquidGlassBackground()
@@ -194,6 +200,7 @@ struct SettingsView: View {
                     .frame(maxWidth: 900, alignment: .leading)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle("")
         }
         .groupBoxStyle(LiquidGlassGroupBoxStyle())
@@ -1120,61 +1127,6 @@ private struct LiquidGlassGroupBoxStyle: GroupBoxStyle {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .liquidGlassPanel(cornerRadius: 16, tint: Color.white.opacity(0.08))
-    }
-}
-
-private struct SettingsSidebar: View {
-    @Binding var selection: SettingsSection?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                Label("ENVPilot", systemImage: "terminal.fill")
-                    .font(.headline)
-                Text("运行时与环境管理")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 18)
-
-            VStack(spacing: 6) {
-                ForEach(SettingsSection.allCases) { section in
-                    Button {
-                        selection = section
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: section.systemImage)
-                                .font(.system(size: 14, weight: .medium))
-                                .frame(width: 22)
-                            Text(section.title)
-                                .font(.callout.weight(selection == section ? .semibold : .regular))
-                            Spacer()
-                        }
-                        .foregroundStyle(selection == section ? Color.accentColor : Color.primary.opacity(0.82))
-                        .padding(.horizontal, 12)
-                        .frame(height: 34)
-                        .background(selection == section ? AppPalette.selectedSurface : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .strokeBorder(selection == section ? AppPalette.borderStrong : Color.clear, lineWidth: 1)
-                        }
-                        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 10)
-
-            Spacer()
-        }
-        .frame(minWidth: 160, maxWidth: 190, maxHeight: .infinity, alignment: .topLeading)
-        .background(AppPalette.sidebarSurface)
-        .overlay(alignment: .trailing) {
-            Rectangle()
-                .fill(AppPalette.border)
-                .frame(width: 1)
-        }
     }
 }
 
