@@ -3,321 +3,186 @@ import ENVPilotCore
 
 struct MenuBarContentView: View {
     @ObservedObject var store: NodeRuntimeStore
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         ZStack {
-            PilotBackground()
+            LiquidGlassBackground()
 
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 12) {
-                    heroCard
-                    if store.isLoading {
-                        progressCard
-                    }
-                    nodeQuickSection
-                    jdkQuickSection
-                    if let message = store.latestError {
-                        errorCard(message: message)
-                    }
-                    footerActions
+            VStack(alignment: .leading, spacing: 0) {
+                menuHeader
+                Divider()
+                runtimeSummary
+                if store.isLoading {
+                    Divider()
+                    ProgressRow(message: store.loadingMessage ?? "正在处理...")
                 }
-                .padding(12)
+                if let message = store.latestError {
+                    Divider()
+                    MessageRow(message: message, systemImage: "exclamationmark.triangle.fill", color: .red)
+                }
+                Divider()
+                quickActions
+                Divider()
+                footerActions
             }
+            .frame(width: 360)
+            .liquidGlassPanel(cornerRadius: 18, tint: Color.white.opacity(0.04))
+            .padding(10)
         }
-        .frame(minWidth: 460, minHeight: 540)
-        .task {
-            await store.refresh()
-        }
+        .frame(width: 380)
     }
 
-    private var heroCard: some View {
-        PilotCard(tint: .blue.opacity(0.14)) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("ENVPilot")
-                            .font(.title3.weight(.semibold))
-                        Text("开发运行时面板")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    PilotBadge(
-                        text: store.isLoading ? "同步中" : "在线",
-                        color: store.isLoading ? .orange : .green
-                    )
-                }
+    private var menuHeader: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "terminal.fill")
+                .font(.title3)
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 28, height: 28)
 
-                HStack(spacing: 8) {
-                    metricPill(
-                        title: "Node",
-                        value: store.displayNodeVersion,
-                        symbol: "shippingbox"
-                    )
-                    metricPill(
-                        title: "JDK",
-                        value: store.displayJavaVersion,
-                        symbol: "cup.and.saucer"
-                    )
-                }
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Node 当前路径")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Text(store.snapshot?.activeNodePath ?? "--")
-                        .font(.caption)
-                        .lineLimit(1)
-                        .textSelection(.enabled)
-                }
-            }
-        }
-    }
-
-    private var progressCard: some View {
-        PilotCard(tint: .orange.opacity(0.10)) {
-            VStack(alignment: .leading, spacing: 8) {
-                ProgressView()
-                    .progressViewStyle(.linear)
-                Text(store.loadingMessage ?? "正在处理...")
+            VStack(alignment: .leading, spacing: 2) {
+                Text("ENVPilot")
+                    .font(.headline)
+                Text(store.isLoading ? "正在同步运行时" : "开发运行时已就绪")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Spacer()
+
+            Button {
+                Task { await store.refresh() }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.borderless)
+            .help("刷新")
+            .disabled(store.isLoading)
         }
+        .padding(12)
     }
 
-    private var nodeQuickSection: some View {
-        PilotCard {
-            VStack(alignment: .leading, spacing: 10) {
-                sectionHeader(
-                    title: "Node 快速切换",
-                    subtitle: "显示前 6 个已安装版本"
+    private var runtimeSummary: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            RuntimeMenuRow(
+                title: "Node",
+                value: store.displayNodeVersion,
+                detail: store.snapshot?.activeNodePath ?? "未检测到 node 命令",
+                systemImage: "shippingbox"
+            )
+            RuntimeMenuRow(
+                title: "JDK",
+                value: store.displayJavaVersion,
+                detail: store.snapshot?.activeJavaHome ?? "未配置 JAVA_HOME",
+                systemImage: "cup.and.saucer"
+            )
+        }
+        .padding(12)
+    }
+
+    private var quickActions: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("快速切换")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let snapshot = store.snapshot {
+                QuickRuntimeMenu(
+                    title: "Node",
+                    emptyTitle: "未发现 ENVPilot Node",
+                    items: Array(snapshot.installations.prefix(5)),
+                    isSelected: { snapshot.settings.selectedVersion == $0.version },
+                    version: { $0.version },
+                    path: { $0.installPath },
+                    action: { item in Task { await store.setDefaultNode(version: item.version) } }
                 )
 
-                if let snapshot = store.snapshot {
-                    if snapshot.installations.isEmpty {
-                        Text("未发现可切换的 Node 版本")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(snapshot.installations.prefix(6)) { item in
-                            Button {
-                                Task { await store.setDefaultNode(version: item.version) }
-                            } label: {
-                                HStack(spacing: 10) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Node \(item.version)")
-                                            .font(.subheadline.weight(.medium))
-                                        Text(item.installPath)
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                    }
-                                    Spacer()
-                                    if isNodeSelected(item: item, snapshot: snapshot) {
-                                        PilotBadge(text: "已选中", color: .green)
-                                    }
-                                    Image(systemName: "arrow.right.circle.fill")
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(10)
-                                .background(PilotPalette.rowBackground)
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(store.isLoading)
-                        }
-                    }
-                } else {
-                    Text("正在载入运行时信息...")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
-    private var jdkQuickSection: some View {
-        PilotCard {
-            VStack(alignment: .leading, spacing: 10) {
-                sectionHeader(
-                    title: "JDK 快速切换",
-                    subtitle: "通过 JAVA_HOME 应用到终端会话"
+                QuickRuntimeMenu(
+                    title: "JDK",
+                    emptyTitle: "未发现 JDK",
+                    items: Array(snapshot.javaInstallations.prefix(5)),
+                    isSelected: { snapshot.settings.selectedJavaHome == $0.homePath },
+                    version: { $0.version },
+                    path: { $0.homePath },
+                    action: { item in Task { await store.setDefaultJava(version: item.version, homePath: item.homePath) } }
                 )
-
-                if let snapshot = store.snapshot, !snapshot.javaInstallations.isEmpty {
-                    ForEach(snapshot.javaInstallations.prefix(6)) { jdk in
-                        Button {
-                            Task { await store.setDefaultJava(version: jdk.version, homePath: jdk.homePath) }
-                        } label: {
-                            HStack(spacing: 10) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("JDK \(jdk.version)")
-                                        .font(.subheadline.weight(.medium))
-                                    Text(jdk.homePath)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                                Spacer()
-                                if snapshot.settings.selectedJavaHome == jdk.homePath {
-                                    PilotBadge(text: "已选中", color: .green)
-                                } else if snapshot.activeJavaHome == jdk.homePath {
-                                    PilotBadge(text: "运行中", color: .blue)
-                                }
-                                Image(systemName: "arrow.right.circle.fill")
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(10)
-                            .background(PilotPalette.rowBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(store.isLoading)
-                    }
-                } else {
-                    Text("未发现已安装 JDK")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
-    private func errorCard(message: String) -> some View {
-        PilotCard(tint: .red.opacity(0.10)) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red)
-                Text(message)
+            } else {
+                Text("正在载入运行时信息...")
                     .font(.caption)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
             }
         }
+        .padding(12)
     }
 
     private var footerActions: some View {
-        PilotCard {
-            HStack(spacing: 8) {
-                Button("刷新") {
-                    Task { await store.refresh() }
-                }
-                .buttonStyle(.bordered)
-                .disabled(store.isLoading)
-
-                Button("打开设置") {
-                    openWindow(id: "settings")
-                }
-                .buttonStyle(.borderedProminent)
-
-                Spacer()
-
-                Button {
-                    NSApp.terminate(nil)
-                } label: {
-                    Text("退出")
-                        .font(.body)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(
-                            Capsule()
-                                .fill(Color.red.opacity(0.14))
-                        )
-                        .overlay(
-                            Capsule()
-                                .stroke(Color.red.opacity(0.18), lineWidth: 1)
-                        )
-                        .foregroundStyle(Color.red)
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
+        HStack {
+            Button {
+                ENVPilotApplicationDelegate.showMainWindow()
+            } label: {
+                Label("打开主界面", systemImage: "macwindow")
             }
-        }
-    }
+            .buttonStyle(.borderedProminent)
 
-    private func metricPill(title: String, value: String, symbol: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: symbol)
-            Text(title)
-                .font(.caption.weight(.medium))
-            Text(value)
-                .font(.caption.weight(.semibold))
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(PilotPalette.pillBackground)
-        .clipShape(Capsule())
-    }
+            Spacer()
 
-    private func sectionHeader(title: String, subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.headline)
-            Text(subtitle)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Button {
+                NSApp.terminate(nil)
+            } label: {
+                Label("退出", systemImage: "power")
+            }
+            .buttonStyle(.borderless)
         }
-    }
-
-    private func isNodeSelected(item: NodeInstallation, snapshot: NodeRuntimeSnapshot) -> Bool {
-        snapshot.settings.selectedVersion == item.version
+        .padding(12)
     }
 }
 
 struct SettingsView: View {
     @ObservedObject var store: NodeRuntimeStore
 
+    @State private var selectedSection: SettingsSection? = .overview
     @State private var selectedProfileID: UUID?
     @State private var draftProfile = EnvironmentProfile(name: "")
     @State private var newProfileName = ""
-    @State private var nodeVersionInput = ""
-    @State private var sdkmanSearchText = ""
-    @State private var isSDKMANSearchExpanded = false
+    @State private var nodeCandidateSearchText = ""
+    @State private var javaCandidateSearchText = ""
+    @State private var nodeCandidatesLTSOnly = true
+    @State private var javaCandidatesLTSOnly = true
     @State private var projectPreference: ProjectVersionPreference = .followProjectFiles
     @State private var isSynchronizing = false
-    @FocusState private var isSDKMANSearchFieldFocused: Bool
 
     var body: some View {
-        NavigationStack {
+        NavigationSplitView {
+            SettingsSidebar(selection: $selectedSection)
+        } detail: {
             ZStack {
-                PilotBackground()
+                LiquidGlassBackground()
 
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        overviewSection
+                    VStack(alignment: .leading, spacing: 18) {
+                        SettingsDetailHeader(
+                            section: selectedSection ?? .overview,
+                            isLoading: store.isLoading,
+                            refreshAction: { Task { await store.refresh() } }
+                        )
 
                         if store.isLoading {
-                            progressBanner
+                            ProgressBanner(message: store.loadingMessage ?? "正在处理...")
                         }
                         if let message = store.latestError {
-                            errorCard(message: message)
+                            InlineMessage(message: message, systemImage: "exclamationmark.triangle.fill", color: .red)
                         }
-
-                        nodeSwitchSection
-                        jdkSwitchSection
-                        projectPreferenceSection
-                        profileSelectionSection
-                        profileEditorSection
+                        detailContent
                     }
                     .padding(24)
+                    .frame(maxWidth: 900, alignment: .leading)
                 }
             }
-            .navigationTitle("ENVPilot 设置")
-            .toolbar {
-                ToolbarItem(placement: .automatic) {
-                    Button("刷新") {
-                        Task { await store.refresh() }
-                    }
-                    .disabled(store.isLoading)
-                }
-            }
+            .navigationTitle("")
         }
+        .groupBoxStyle(LiquidGlassGroupBoxStyle())
         .task {
-            if store.snapshot == nil {
-                await store.refresh()
-            }
             synchronizeFromSnapshot()
         }
         .onChange(of: store.snapshot?.settings.selectedProfileID) { _ in
@@ -346,485 +211,500 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
+    private var detailContent: some View {
+        switch selectedSection ?? .overview {
+        case .overview:
+            overviewSection
+        case .node:
+            nodeSection
+        case .jdk:
+            jdkSection
+        case .project:
+            projectSection
+        case .profiles:
+            profilesSection
+        }
+    }
+
     private var profiles: [EnvironmentProfile] {
         store.snapshot?.settings.profiles ?? []
     }
 
-    private var progressBanner: some View {
-        PilotCard(tint: .orange.opacity(0.10)) {
-            VStack(alignment: .leading, spacing: 10) {
-                ProgressView()
-                    .progressViewStyle(.linear)
-                Text(store.loadingMessage ?? "正在处理...")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+    private var configuredNodeOverviewStatus: String {
+        guard store.snapshot?.settings.selectedVersion != nil else {
+            return "未配置"
         }
+        return store.configuredNodeInstallation == nil ? "未下载" : "已下载"
+    }
+
+    private var configuredJavaOverviewStatus: String {
+        guard let selectedJavaHome = store.snapshot?.settings.selectedJavaHome, !selectedJavaHome.isEmpty else {
+            return "未配置"
+        }
+        let isInstalled = store.snapshot?.javaInstallations.contains { $0.homePath == selectedJavaHome } == true
+        return isInstalled ? "已下载" : "未下载"
     }
 
     private var overviewSection: some View {
-        PilotCard(tint: .blue.opacity(0.12)) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("运行时概览")
-                            .font(.title3.weight(.semibold))
-                        Text("当前会话与已配置版本状态")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    PilotBadge(text: store.configuredNodeStatus, color: .blue)
-                }
-
-                LazyVGrid(
-                    columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)],
-                    spacing: 10
-                ) {
-                    metricTile("Node 配置版本", value: store.configuredNodeVersion)
-                    metricTile("Node 命令版本", value: store.snapshot?.activeVersion ?? "--")
-                    metricTile("JDK 已选版本", value: store.displayJavaVersion)
-                    metricTile("JDK 命令版本", value: store.snapshot?.activeJavaVersion ?? "--")
-                }
-
-                Divider()
-
-                keyValueLine("Node 配置路径", value: store.configuredNodeInstallation?.installPath ?? "--")
-                keyValueLine("Node 命令路径", value: store.snapshot?.activeNodePath ?? "--")
-            }
-        }
-    }
-
-    private var nodeSwitchSection: some View {
-        PilotCard {
-            VStack(alignment: .leading, spacing: 12) {
-                sectionTitle("Node（NVM）", subtitle: "安装 / 切换 / 卸载")
-
-                Text("仅支持 NVM 管理 Node 版本。启动时若未检测到 Homebrew，会先自动安装 Homebrew，再安装 NVM。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                HStack(spacing: 10) {
-                    TextField("输入版本号，如 24、24.11.1、lts", text: $nodeVersionInput)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(store.isLoading)
-                    Button("安装") {
-                        let version = nodeVersionInput.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !version.isEmpty else {
-                            return
-                        }
-                        nodeVersionInput = ""
-                        Task { await store.installNode(version: version) }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(store.isLoading || nodeVersionInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-
-                if let installations = store.snapshot?.installations, !installations.isEmpty {
-                    ForEach(installations) { item in
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Text("Node \(item.version)")
-                                    .font(.subheadline.weight(.medium))
-                                Spacer()
-                                if isNodeSelected(item: item) {
-                                    PilotBadge(text: "已选中", color: .green)
-                                }
-                                Button("切换") {
-                                    Task { await store.setDefaultNode(version: item.version) }
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(store.isLoading)
-                                Button("卸载") {
-                                    Task { await store.uninstallNode(version: item.version) }
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(store.isLoading)
-                            }
-                            Text(item.installPath)
-                                .font(.caption)
+        VStack(alignment: .leading, spacing: 16) {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("运行时概览")
+                                .font(.title2.weight(.semibold))
+                            Text("查看 ENVPilot 已选运行时与终端激活后的生效路径。")
                                 .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
                         }
-                        .padding(10)
-                        .background(PilotPalette.rowBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("未发现通过 NVM 安装的 Node 版本，可直接在上方输入版本并安装。")
-                        if let selectedVersion = store.snapshot?.settings.selectedVersion, !selectedVersion.isEmpty {
-                            Text("当前配置版本是 \(selectedVersion)，但它不在 NVM 检测列表中。")
-                        }
-                        if let activePath = store.snapshot?.activeNodePath, !activePath.isEmpty {
-                            Text("当前 node 命令来自 \(activePath)。")
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(10)
-                    .background(PilotPalette.rowBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-            }
-        }
-    }
-
-    private var jdkSwitchSection: some View {
-        PilotCard {
-            VStack(alignment: .leading, spacing: 10) {
-                sectionTitle("JDK 单独切换", subtitle: "兼容系统 JDK 与 SDKMAN 安装")
-
-                Text("推荐使用 SDKMAN 管理和安装 JDK；切换后会通过 JAVA_HOME 生效。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                sdkmanControlPanel
-
-                if let javaInstallations = store.snapshot?.javaInstallations, !javaInstallations.isEmpty {
-                    ForEach(javaInstallations) { jdk in
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Text("JDK \(jdk.version)")
-                                    .font(.subheadline.weight(.medium))
-                                Spacer()
-                                if let sdkmanIdentifier = JavaRuntimeDetector.sdkmanJavaIdentifier(fromHomePath: jdk.homePath) {
-                                    PilotBadge(text: "SDKMAN", color: .orange)
-                                    Text(sdkmanIdentifier)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                if store.snapshot?.settings.selectedJavaHome == jdk.homePath {
-                                    PilotBadge(text: "已选中", color: .green)
-                                } else if store.snapshot?.activeJavaHome == jdk.homePath {
-                                    PilotBadge(text: "运行中", color: .blue)
-                                }
-                                Button("切换") {
-                                    Task { await store.setDefaultJava(version: jdk.version, homePath: jdk.homePath) }
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(store.isLoading)
-                                Button("卸载") {
-                                    Task { await store.uninstallJava(version: jdk.version, homePath: jdk.homePath) }
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(store.isLoading)
-                            }
-                            Text(jdk.homePath)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                        }
-                        .padding(10)
-                        .background(PilotPalette.rowBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("未发现本机 JDK。")
-                        Text("可先安装 SDKMAN，再通过上方模糊搜索安装 JDK。")
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(10)
-                    .background(PilotPalette.rowBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-            }
-        }
-    }
-
-    private var sdkmanControlPanel: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 8) {
-                PilotBadge(
-                    text: store.sdkmanStatus.isInstalled ? "SDKMAN 已就绪" : "SDKMAN 未安装",
-                    color: store.sdkmanStatus.isInstalled ? .green : .orange
-                )
-                Text(store.sdkmanStatusText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if !store.sdkmanStatus.isInstalled, store.sdkmanStatus.canInstall {
-                    Button("安装 SDKMAN") {
-                        Task { await store.installSDKMAN() }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(store.isLoading)
-                }
-            }
-
-            if store.sdkmanStatus.isInstalled {
-                HStack(spacing: 10) {
-                    Text("候选搜索")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button(isSDKMANSearchExpanded ? "收起搜索" : "搜索候选") {
-                        if isSDKMANSearchExpanded {
-                            collapseSDKMANSearchPanel()
-                        } else {
-                            isSDKMANSearchExpanded = true
-                            isSDKMANSearchFieldFocused = true
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(store.isLoading)
-                }
-
-                if isSDKMANSearchExpanded {
-                    HStack(spacing: 10) {
-                        TextField("模糊查询 Java candidate，如 tem、17、zulu", text: $sdkmanSearchText)
-                            .textFieldStyle(.roundedBorder)
-                            .disabled(store.isLoading)
-                            .focused($isSDKMANSearchFieldFocused)
-                        Button("查询版本") {
-                            Task { await store.querySDKMANJavaCandidates() }
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(store.isLoading)
-                        Button("关闭") {
-                            collapseSDKMANSearchPanel()
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(store.isLoading)
+                        Spacer()
+                        StatusBadge(text: store.configuredNodeStatus, systemImage: "checkmark.circle.fill", color: .blue)
                     }
 
-                    if !store.sdkmanJavaCandidates.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(filteredSDKMANJavaCandidates.prefix(12)) { candidate in
-                                HStack(spacing: 8) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(candidate.identifier)
-                                            .font(.subheadline.weight(.medium))
-                                        Text("\(candidate.vendor) · \(candidate.version) · \(candidate.distribution)")
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    if candidate.isInstalled {
-                                        PilotBadge(text: "已安装", color: .green)
-                                    }
-                                    Button("安装") {
-                                        Task { await store.installJavaWithSDKMAN(identifier: candidate.identifier) }
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .disabled(store.isLoading || candidate.isInstalled)
-                                }
-                                .padding(10)
-                                .background(PilotPalette.cardBackground.opacity(0.72))
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            }
-
-                            if filteredSDKMANJavaCandidates.count > 12 {
-                                Text("仅显示前 12 条结果，请继续缩小搜索范围。")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    } else {
-                        Text("点击“查询版本”后可按 vendor、version、identifier 模糊过滤可安装 JDK。")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                    LazyVGrid(
+                        columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
+                        spacing: 12
+                    ) {
+                        MetricTile(title: "Node 已选版本", value: store.configuredNodeVersion, systemImage: "shippingbox")
+                        MetricTile(title: "Node 状态", value: configuredNodeOverviewStatus, systemImage: "terminal")
+                        MetricTile(title: "JDK 已选版本", value: store.snapshot?.settings.selectedJavaVersion ?? "--", systemImage: "cup.and.saucer")
+                        MetricTile(title: "JDK 状态", value: configuredJavaOverviewStatus, systemImage: "terminal")
                     }
-                }
-            }
-
-            if !store.sdkmanStatus.isInstalled {
-                Text("首次安装 JDK 时会先尝试安装 SDKMAN。")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(10)
-        .background(PilotPalette.rowBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-
-    private var projectPreferenceSection: some View {
-        PilotCard {
-            VStack(alignment: .leading, spacing: 10) {
-                sectionTitle("项目版本策略", subtitle: "控制 Node 版本选择优先级")
-                Picker("Node 版本来源", selection: $projectPreference) {
-                    Text("跟随 .nvmrc/.node-version").tag(ProjectVersionPreference.followProjectFiles)
-                    Text("始终使用全局已选版本").tag(ProjectVersionPreference.globalDefault)
-                }
-                .pickerStyle(.segmented)
-                .disabled(store.isLoading)
-            }
-        }
-    }
-
-    private var profileSelectionSection: some View {
-        PilotCard {
-            VStack(alignment: .leading, spacing: 12) {
-                sectionTitle("环境配置", subtitle: "管理当前激活的环境变量集合")
-                if profiles.isEmpty {
-                    Text("当前没有可用配置。")
-                        .foregroundStyle(.secondary)
-                } else {
-                    Picker("当前配置", selection: $selectedProfileID) {
-                        ForEach(profiles) { profile in
-                            Text(profile.name).tag(Optional(profile.id))
-                        }
-                    }
-                    .disabled(store.isLoading)
-                }
-
-                HStack {
-                    TextField("新配置名称", text: $newProfileName)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(store.isLoading)
-                    Button("创建") {
-                        let name = newProfileName
-                        newProfileName = ""
-                        Task { await store.createProfile(named: name) }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(store.isLoading)
-                }
-            }
-        }
-    }
-
-    private var profileEditorSection: some View {
-        PilotCard {
-            VStack(alignment: .leading, spacing: 12) {
-                sectionTitle("配置编辑", subtitle: "编辑 registry、NODE_OPTIONS 与自定义变量")
-                if selectedProfileID == nil {
-                    Text("请选择或创建一个配置后再编辑环境变量。")
-                        .foregroundStyle(.secondary)
-                } else {
-                    TextField("配置名称", text: $draftProfile.name)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(store.isLoading)
-                    TextField("npm registry", text: $draftProfile.npmRegistry)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(store.isLoading)
-                    TextField("pnpm registry", text: $draftProfile.pnpmRegistry)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(store.isLoading)
-                    TextField("yarn registry", text: $draftProfile.yarnRegistry)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(store.isLoading)
-                    TextField("NODE_OPTIONS", text: $draftProfile.nodeOptions)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(store.isLoading)
 
                     Divider()
-                    Text("自定义环境变量")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
 
-                    if draftProfile.variables.isEmpty {
-                        Text("暂无自定义变量。")
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
+                    VStack(alignment: .leading, spacing: 10) {
+                        PathRow(title: "Node 安装目录（已选）", value: store.configuredNodeInstallation?.installPath ?? "未选择")
+                        PathRow(title: "ENVPilot node 可执行文件", value: store.configuredNodeInstallation?.executablePath ?? "未选择")
+                        PathRow(title: "JAVA_HOME（已选）", value: store.snapshot?.settings.selectedJavaHome ?? "未选择")
+                    }
+                }
+            }
+
+            GroupBox("当前环境配置") {
+                VStack(alignment: .leading, spacing: 10) {
+                    LabeledContent("配置") {
+                        Text(currentProfileName)
+                    }
+                    LabeledContent("Node 版本来源") {
+                        Text(projectPreferenceText(store.snapshot?.settings.projectVersionPreference ?? .followProjectFiles))
+                    }
+                    LabeledContent("切换方式") {
+                        Text("ENVPilot 环境变量")
+                    }
+                }
+            }
+        }
+    }
+
+    private var nodeSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 16) {
+                SectionHeader(
+                    title: "Node",
+                    subtitle: "从 Node 官方分发安装到 ENVPilot 目录，并通过环境变量切换 PATH。",
+                    systemImage: "shippingbox"
+                )
+
+                installNodePanel
+
+                if let installations = store.snapshot?.installations, !installations.isEmpty {
+                    VStack(spacing: 8) {
+                        ForEach(installations) { item in
+                            let canUninstall = isManagedNodePath(item.installPath)
+                            RuntimeListRow(
+                                title: "Node \(item.version)",
+                                path: item.installPath,
+                                badges: nodeBadges(for: item),
+                                primaryTitle: "切换",
+                                primarySystemImage: "arrow.triangle.2.circlepath",
+                                destructiveTitle: canUninstall ? "卸载" : "",
+                                primaryAction: { Task { await store.setDefaultNode(version: item.version) } },
+                                destructiveAction: { Task { await store.uninstallNode(version: item.version) } },
+                                isDisabled: store.isLoading
+                            )
+                        }
+                    }
+                } else {
+                    EmptyState(
+                        title: "未发现 ENVPilot Node",
+                        message: nodeEmptyMessage,
+                        systemImage: "shippingbox"
+                    )
+                }
+            }
+        }
+    }
+
+    private var jdkSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 16) {
+                    SectionHeader(
+                        title: "JDK",
+                        subtitle: "从 Adoptium Temurin 安装到 ENVPilot 目录，并写入 JAVA_HOME 与 PATH。",
+                        systemImage: "cup.and.saucer"
+                    )
+                    installJavaPanel
+                }
+            }
+
+            GroupBox("已安装 JDK") {
+                if let javaInstallations = store.snapshot?.javaInstallations, !javaInstallations.isEmpty {
+                    VStack(spacing: 8) {
+                        ForEach(javaInstallations) { jdk in
+                            let canUninstall = isManagedJavaPath(jdk.homePath)
+                            RuntimeListRow(
+                                title: "JDK \(jdk.version)",
+                                path: jdk.homePath,
+                                badges: javaBadges(for: jdk),
+                                primaryTitle: "切换",
+                                primarySystemImage: "arrow.triangle.2.circlepath",
+                                destructiveTitle: canUninstall ? "卸载" : "",
+                                primaryAction: { Task { await store.setDefaultJava(version: jdk.version, homePath: jdk.homePath) } },
+                                destructiveAction: { Task { await store.uninstallJava(version: jdk.version, homePath: jdk.homePath) } },
+                                isDisabled: store.isLoading
+                            )
+                        }
+                    }
+                } else {
+                    EmptyState(
+                        title: "未发现 ENVPilot JDK",
+                        message: "可以在上方查询 Temurin 候选版本并安装到 ENVPilot 目录。",
+                        systemImage: "cup.and.saucer"
+                    )
+                }
+            }
+        }
+    }
+
+    private var installNodePanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .bottom, spacing: 12) {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("搜索 Node 版本")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.primary)
+                    TextField("过滤版本，例如 22、20 或 LTS 名称", text: $nodeCandidateSearchText)
+                        .textFieldStyle(EnvPilotTextFieldStyle())
+                        .disabled(store.isLoading)
+                }
+                Toggle("仅 LTS", isOn: $nodeCandidatesLTSOnly)
+                    .toggleStyle(.switch)
+                    .disabled(store.isLoading)
+                Button {
+                    Task { await store.queryNodeDownloadCandidates(ltsOnly: nodeCandidatesLTSOnly) }
+                } label: {
+                    Label("查询", systemImage: "arrow.clockwise")
+                }
+                .controlSize(.large)
+                .buttonStyle(.borderedProminent)
+                .disabled(store.isLoading)
+            }
+            .padding(14)
+            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(AppPalette.borderStrong, lineWidth: 1)
+            }
+
+            if store.nodeDownloadCandidates.isEmpty {
+                InlineMessage(message: "点击查询后展示 Node 官方可下载版本。", systemImage: "info.circle", color: .blue)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(filteredNodeDownloadCandidates.prefix(12)) { candidate in
+                        let isInstalled = isNodeCandidateInstalled(candidate)
+                        let isInstalling = store.installingCandidateID == nodeCandidateID(candidate)
+                        DownloadCandidateRow(
+                            title: "Node \(candidate.version)",
+                            subtitle: candidate.lts.map { "LTS \($0)" } ?? "Current",
+                            badges: nodeCandidateBadges(candidate, isInstalled: isInstalled),
+                            progressMessage: isInstalling ? store.installingCandidateMessage : nil,
+                            actionTitle: isInstalled ? "已下载" : (isInstalling ? "安装中" : "安装"),
+                            actionSystemImage: isInstalled ? "checkmark.circle" : (isInstalling ? "hourglass" : "square.and.arrow.down"),
+                            action: { Task { await store.installNode(version: candidate.version) } },
+                            isDisabled: store.isLoading || isInstalled
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private var installJavaPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .bottom, spacing: 12) {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("搜索 JDK 版本")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.primary)
+                    TextField("过滤版本，例如 21、17 或 Temurin", text: $javaCandidateSearchText)
+                        .textFieldStyle(EnvPilotTextFieldStyle())
+                        .disabled(store.isLoading)
+                }
+                Toggle("仅 LTS", isOn: $javaCandidatesLTSOnly)
+                    .toggleStyle(.switch)
+                    .disabled(store.isLoading)
+                Button {
+                    Task { await store.queryJavaDownloadCandidates(ltsOnly: javaCandidatesLTSOnly) }
+                } label: {
+                    Label("查询", systemImage: "arrow.clockwise")
+                }
+                .controlSize(.large)
+                .buttonStyle(.borderedProminent)
+                .disabled(store.isLoading)
+            }
+            .padding(14)
+            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(AppPalette.borderStrong, lineWidth: 1)
+            }
+
+            if store.javaDownloadCandidates.isEmpty {
+                InlineMessage(message: "点击查询后展示 Temurin JDK 可下载版本。", systemImage: "info.circle", color: .blue)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(filteredJavaDownloadCandidates.prefix(12)) { candidate in
+                        let isInstalled = isJavaCandidateInstalled(candidate)
+                        let isInstalling = store.installingCandidateID == javaCandidateID(candidate)
+                        DownloadCandidateRow(
+                            title: "JDK \(candidate.featureVersion)",
+                            subtitle: "\(candidate.vendor) \(candidate.version)",
+                            badges: javaCandidateBadges(candidate, isInstalled: isInstalled),
+                            progressMessage: isInstalling ? store.installingCandidateMessage : nil,
+                            actionTitle: isInstalled ? "已下载" : (isInstalling ? "安装中" : "安装"),
+                            actionSystemImage: isInstalled ? "checkmark.circle" : (isInstalling ? "hourglass" : "square.and.arrow.down"),
+                            action: { Task { await store.installJava(featureVersion: candidate.featureVersion) } },
+                            isDisabled: store.isLoading || isInstalled
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private var projectSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 16) {
+                SectionHeader(
+                    title: "项目版本策略",
+                    subtitle: "控制进入项目目录时 Node 版本选择优先级。",
+                    systemImage: "folder.badge.gearshape"
+                )
+
+                Picker("", selection: $projectPreference) {
+                    Text("跟随 .envpilot 项目配置").tag(ProjectVersionPreference.followProjectFiles)
+                    Text("始终使用全局已选版本").tag(ProjectVersionPreference.globalDefault)
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .disabled(store.isLoading)
+
+                InlineMessage(
+                    message: projectPreferenceHelpText,
+                    systemImage: "info.circle",
+                    color: .blue
+                )
+            }
+        }
+    }
+
+    private var profilesSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 14) {
+                    SectionHeader(
+                        title: "环境配置",
+                        subtitle: "管理当前激活的 registry、NODE_OPTIONS 与自定义变量。",
+                        systemImage: "slider.horizontal.3"
+                    )
+
+                    if profiles.isEmpty {
+                        EmptyState(title: "当前没有可用配置", message: "创建一个配置后即可编辑环境变量。", systemImage: "slider.horizontal.3")
+                    } else {
+                        Picker("当前配置", selection: $selectedProfileID) {
+                            ForEach(profiles) { profile in
+                                Text(profile.name).tag(Optional(profile.id))
+                            }
+                        }
+                        .disabled(store.isLoading)
                     }
 
+                    HStack(alignment: .bottom, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 7) {
+                            Text("新建配置")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.primary)
+                            TextField("输入配置名称", text: $newProfileName)
+                                .textFieldStyle(EnvPilotTextFieldStyle())
+                                .disabled(store.isLoading)
+                        }
+                        .frame(maxWidth: .infinity)
+                        Button {
+                            let name = newProfileName.trimmingCharacters(in: .whitespacesAndNewlines)
+                            newProfileName = ""
+                            Task { await store.createProfile(named: name) }
+                        } label: {
+                            Label("创建", systemImage: "plus")
+                        }
+                        .controlSize(.large)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(store.isLoading || newProfileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    .padding(14)
+                    .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(AppPalette.borderStrong, lineWidth: 1.2)
+                    }
+                }
+            }
+
+            GroupBox("配置编辑") {
+                if selectedProfileID == nil {
+                    EmptyState(title: "请选择一个配置", message: "选中或创建配置后再编辑环境变量。", systemImage: "pencil")
+                } else {
+                    profileEditor
+                }
+            }
+        }
+    }
+
+    private var profileEditor: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 12) {
+                ProfileInputRow(title: "配置名称") {
+                    TextField("例如：默认、公司网络、私有源", text: $draftProfile.name)
+                        .textFieldStyle(EnvPilotTextFieldStyle())
+                        .disabled(store.isLoading)
+                }
+                ProfileInputRow(title: "npm registry") {
+                    TextField("https://registry.npmjs.org/", text: $draftProfile.npmRegistry)
+                        .textFieldStyle(EnvPilotTextFieldStyle())
+                        .disabled(store.isLoading)
+                }
+                ProfileInputRow(title: "pnpm registry") {
+                    TextField("留空则不设置", text: $draftProfile.pnpmRegistry)
+                        .textFieldStyle(EnvPilotTextFieldStyle())
+                        .disabled(store.isLoading)
+                }
+                ProfileInputRow(title: "yarn registry") {
+                    TextField("留空则不设置", text: $draftProfile.yarnRegistry)
+                        .textFieldStyle(EnvPilotTextFieldStyle())
+                        .disabled(store.isLoading)
+                }
+                ProfileInputRow(title: "NODE_OPTIONS") {
+                    TextField("例如 --max-old-space-size=4096", text: $draftProfile.nodeOptions)
+                        .textFieldStyle(EnvPilotTextFieldStyle())
+                        .disabled(store.isLoading)
+                }
+            }
+            .padding(14)
+            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(AppPalette.borderStrong, lineWidth: 1)
+            }
+
+            Divider()
+
+            HStack {
+                Text("自定义环境变量")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    draftProfile.variables.append(CustomEnvironmentVariable(key: "", value: ""))
+                } label: {
+                    Label("新增变量", systemImage: "plus")
+                }
+                .disabled(store.isLoading)
+            }
+
+            if draftProfile.variables.isEmpty {
+                Text("暂无自定义变量。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(spacing: 8) {
                     ForEach(Array(draftProfile.variables.indices), id: \.self) { index in
                         HStack(spacing: 8) {
                             TextField("KEY", text: $draftProfile.variables[index].key)
-                                .textFieldStyle(.roundedBorder)
+                                .textFieldStyle(EnvPilotTextFieldStyle())
                                 .disabled(store.isLoading)
                             TextField("VALUE", text: $draftProfile.variables[index].value)
-                                .textFieldStyle(.roundedBorder)
+                                .textFieldStyle(EnvPilotTextFieldStyle())
                                 .disabled(store.isLoading)
-                            Button("删除") {
+                            Button(role: .destructive) {
                                 draftProfile.variables.remove(at: index)
+                            } label: {
+                                Image(systemName: "minus.circle")
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.borderless)
+                            .help("删除变量")
                             .disabled(store.isLoading)
                         }
-                        .padding(8)
-                        .background(PilotPalette.rowBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-
-                    HStack {
-                        Button("新增变量") {
-                            draftProfile.variables.append(CustomEnvironmentVariable(key: "", value: ""))
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(store.isLoading)
-                        Spacer()
-                        Button("重置") {
-                            synchronizeFromSnapshot()
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(store.isLoading)
-                        Button("保存配置") {
-                            Task { await store.saveProfile(draftProfile) }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(store.isLoading || draftProfile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
             }
-        }
-    }
 
-    private func errorCard(message: String) -> some View {
-        PilotCard(tint: .red.opacity(0.10)) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red)
-                Text(message)
-                    .font(.caption)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            HStack {
+                Spacer()
+                Button {
+                    synchronizeFromSnapshot()
+                } label: {
+                    Label("重置", systemImage: "arrow.uturn.backward")
+                }
+                .disabled(store.isLoading)
+
+                Button {
+                    Task { await store.saveProfile(draftProfile) }
+                } label: {
+                    Label("保存配置", systemImage: "checkmark")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(store.isLoading || draftProfile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
     }
 
-    private func metricTile(_ title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.headline)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+    private var currentProfileName: String {
+        guard let selectedID = store.snapshot?.settings.selectedProfileID,
+              let profile = store.snapshot?.settings.profiles.first(where: { $0.id == selectedID }) else {
+            return "未选择"
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(PilotPalette.rowBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        return profile.name
     }
 
-    private func keyValueLine(_ key: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(key)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.caption)
-                .textSelection(.enabled)
-                .lineLimit(1)
+    private var nodeEmptyMessage: String {
+        var messages = ["可以在上方查询 Node 官方候选版本并安装到 ENVPilot 目录。"]
+        if let selectedVersion = store.snapshot?.settings.selectedVersion, !selectedVersion.isEmpty {
+            messages.append("当前配置版本是 \(selectedVersion)，但未检测到对应的 ENVPilot Node 安装路径。")
         }
+        if let activePath = store.snapshot?.activeNodePath, !activePath.isEmpty {
+            messages.append("当前 node 命令来自 \(activePath)。")
+        }
+        return messages.joined(separator: " ")
     }
 
-    private func sectionTitle(_ title: String, subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.headline)
-            Text(subtitle)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+    private var projectPreferenceHelpText: String {
+        switch projectPreference {
+        case .followProjectFiles:
+            return "进入项目目录时优先读取 .envpilot 中的 NODE_VERSION；未声明时使用全局已选版本。"
+        case .globalDefault:
+            return "忽略项目内版本文件，始终使用 ENVPilot 中配置的全局 Node 版本。"
         }
     }
 
-    private var filteredSDKMANJavaCandidates: [SDKMANJavaCandidate] {
-        let query = sdkmanSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    private var filteredNodeDownloadCandidates: [NodeDownloadCandidate] {
+        let query = nodeCandidateSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else {
-            return store.sdkmanJavaCandidates
+            return store.nodeDownloadCandidates
         }
-        return store.sdkmanJavaCandidates.filter { candidate in
+        return store.nodeDownloadCandidates.filter { candidate in
             [
-                candidate.identifier,
-                candidate.vendor,
                 candidate.version,
-                candidate.distribution,
+                candidate.lts ?? "",
             ]
             .joined(separator: " ")
             .lowercased()
@@ -832,11 +712,63 @@ struct SettingsView: View {
         }
     }
 
-    private func collapseSDKMANSearchPanel() {
-        isSDKMANSearchExpanded = false
-        isSDKMANSearchFieldFocused = false
-        sdkmanSearchText = ""
-        store.clearSDKMANJavaCandidates()
+    private var filteredJavaDownloadCandidates: [JavaDownloadCandidate] {
+        let query = javaCandidateSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else {
+            return store.javaDownloadCandidates
+        }
+        return store.javaDownloadCandidates.filter { candidate in
+            [
+                String(candidate.featureVersion),
+                candidate.version,
+                candidate.vendor,
+                candidate.packageName,
+            ]
+            .joined(separator: " ")
+            .lowercased()
+            .contains(query)
+        }
+    }
+
+    private func nodeBadges(for item: NodeInstallation) -> [StatusBadgeModel] {
+        var badges: [StatusBadgeModel] = []
+        if isManagedNodePath(item.installPath) {
+            badges.append(StatusBadgeModel(text: "ENVPilot", systemImage: "checkmark.seal.fill", color: .orange))
+        }
+        if isNodeSelected(item: item) {
+            badges.append(StatusBadgeModel(text: "已选中", systemImage: "checkmark.circle.fill", color: .green))
+        }
+        return badges
+    }
+
+    private func javaBadges(for jdk: JavaInstallation) -> [StatusBadgeModel] {
+        var badges: [StatusBadgeModel] = []
+        if isManagedJavaPath(jdk.homePath) {
+            badges.append(StatusBadgeModel(text: "ENVPilot", systemImage: "checkmark.seal.fill", color: .orange))
+        }
+        if store.snapshot?.settings.selectedJavaHome == jdk.homePath {
+            badges.append(StatusBadgeModel(text: "已选中", systemImage: "checkmark.circle.fill", color: .green))
+        } else if store.snapshot?.activeJavaHome == jdk.homePath {
+            badges.append(StatusBadgeModel(text: "运行中", systemImage: "play.circle.fill", color: .blue))
+        }
+        return badges
+    }
+
+    private func projectPreferenceText(_ preference: ProjectVersionPreference) -> String {
+        switch preference {
+        case .followProjectFiles:
+            return "跟随 .envpilot 项目配置"
+        case .globalDefault:
+            return "始终使用全局版本"
+        }
+    }
+
+    private func isManagedNodePath(_ path: String) -> Bool {
+        path.contains("/.envpilot/runtimes/node/")
+    }
+
+    private func isManagedJavaPath(_ path: String) -> Bool {
+        path.contains("/.envpilot/runtimes/java/")
     }
 
     private func synchronizeFromSnapshot() {
@@ -867,75 +799,698 @@ struct SettingsView: View {
         }
         return snapshot.settings.selectedVersion == item.version
     }
-}
 
-private enum PilotPalette {
-    static let cardBackground = Color.white.opacity(0.82)
-    static let rowBackground = Color.black.opacity(0.05)
-    static let pillBackground = Color.white.opacity(0.72)
-}
+    private func nodeCandidateID(_ candidate: NodeDownloadCandidate) -> String {
+        "node-\(candidate.version)"
+    }
 
-private struct PilotBackground: View {
-    var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.90, green: 0.95, blue: 1.00),
-                    Color(red: 0.94, green: 0.97, blue: 0.94),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            Circle()
-                .fill(Color.blue.opacity(0.18))
-                .frame(width: 260, height: 260)
-                .offset(x: 160, y: -240)
-                .blur(radius: 36)
-            Circle()
-                .fill(Color.mint.opacity(0.16))
-                .frame(width: 300, height: 300)
-                .offset(x: -180, y: 280)
-                .blur(radius: 48)
+    private func javaCandidateID(_ candidate: JavaDownloadCandidate) -> String {
+        "java-\(candidate.featureVersion)"
+    }
+
+    private func isNodeCandidateInstalled(_ candidate: NodeDownloadCandidate) -> Bool {
+        store.snapshot?.installations.contains { $0.version == candidate.version } == true
+    }
+
+    private func isJavaCandidateInstalled(_ candidate: JavaDownloadCandidate) -> Bool {
+        store.snapshot?.javaInstallations.contains { javaVersion($0.version, matchesFeatureVersion: candidate.featureVersion) } == true
+    }
+
+    private func nodeCandidateBadges(_ candidate: NodeDownloadCandidate, isInstalled: Bool) -> [StatusBadgeModel] {
+        var badges: [StatusBadgeModel] = []
+        if isInstalled {
+            badges.append(StatusBadgeModel(text: "已下载", systemImage: "checkmark.circle.fill", color: .green))
         }
+        if candidate.lts != nil {
+            badges.append(StatusBadgeModel(text: "LTS", systemImage: "clock.badge.checkmark", color: .blue))
+        }
+        return badges
+    }
+
+    private func javaCandidateBadges(_ candidate: JavaDownloadCandidate, isInstalled: Bool) -> [StatusBadgeModel] {
+        var badges: [StatusBadgeModel] = []
+        if isInstalled {
+            badges.append(StatusBadgeModel(text: "已下载", systemImage: "checkmark.circle.fill", color: .green))
+        }
+        if candidate.version.contains("LTS") || [25, 21, 17, 11, 8].contains(candidate.featureVersion) {
+            badges.append(StatusBadgeModel(text: "LTS", systemImage: "clock.badge.checkmark", color: .blue))
+        }
+        return badges
+    }
+
+    private func javaVersion(_ version: String, matchesFeatureVersion featureVersion: Int) -> Bool {
+        version == String(featureVersion) || version.hasPrefix("\(featureVersion).")
+    }
+}
+
+private enum AppPalette {
+    static let pageBackgroundTop = Color(red: 0.97, green: 0.985, blue: 1.00)
+    static let pageBackgroundBottom = Color(red: 0.95, green: 0.97, blue: 0.965)
+    static let panelSurface = Color(nsColor: .controlBackgroundColor)
+    static let controlSurface = Color(nsColor: .textBackgroundColor)
+    static let rowSurface = Color.white.opacity(0.72)
+    static let sidebarSurface = Color(nsColor: .windowBackgroundColor)
+    static let selectedSurface = Color.accentColor.opacity(0.14)
+    static let border = Color.black.opacity(0.10)
+    static let borderStrong = Color.accentColor.opacity(0.34)
+    static let shadow = Color.black.opacity(0.07)
+}
+
+private struct LiquidGlassBackground: View {
+    var body: some View {
+        LinearGradient(
+            colors: [
+                AppPalette.pageBackgroundTop,
+                AppPalette.pageBackgroundBottom,
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
         .ignoresSafeArea()
     }
 }
 
-private struct PilotCard<Content: View>: View {
-    var tint: Color = .clear
-    @ViewBuilder var content: Content
+private struct LiquidGlassPanelModifier: ViewModifier {
+    let cornerRadius: CGFloat
+    let tint: Color
 
-    var body: some View {
+    func body(content: Content) -> some View {
         content
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(PilotPalette.cardBackground)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(tint)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.black.opacity(0.06), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.04), radius: 12, x: 0, y: 6)
+            .background(AppPalette.panelSurface, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .background(tint, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(AppPalette.border, lineWidth: 1)
+            }
+            .overlay(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.56),
+                                Color.white.opacity(0.12),
+                                Color.clear,
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+                    .allowsHitTesting(false)
+            }
+            .shadow(color: AppPalette.shadow, radius: 16, x: 0, y: 8)
     }
 }
 
-private struct PilotBadge: View {
+private extension View {
+    func liquidGlassPanel(cornerRadius: CGFloat = 14, tint: Color = .clear) -> some View {
+        modifier(LiquidGlassPanelModifier(cornerRadius: cornerRadius, tint: tint))
+    }
+}
+
+private struct EnvPilotTextFieldStyle: TextFieldStyle {
+    func _body(configuration: TextField<Self._Label>) -> some View {
+        configuration
+            .textFieldStyle(.plain)
+            .padding(.horizontal, 11)
+            .frame(minHeight: 36)
+            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(Color.accentColor.opacity(0.62), lineWidth: 1.2)
+            }
+            .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 1)
+    }
+}
+
+private struct ProfileInputRow<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+            content
+        }
+    }
+}
+
+private struct LiquidGlassGroupBoxStyle: GroupBoxStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            configuration.label
+                .font(.headline)
+            configuration.content
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .liquidGlassPanel(cornerRadius: 16, tint: Color.white.opacity(0.08))
+    }
+}
+
+private struct SettingsSidebar: View {
+    @Binding var selection: SettingsSection?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Label("ENVPilot", systemImage: "terminal.fill")
+                    .font(.headline)
+                Text("运行时与环境管理")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 18)
+
+            VStack(spacing: 6) {
+                ForEach(SettingsSection.allCases) { section in
+                    Button {
+                        selection = section
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: section.systemImage)
+                                .font(.system(size: 14, weight: .medium))
+                                .frame(width: 22)
+                            Text(section.title)
+                                .font(.callout.weight(selection == section ? .semibold : .regular))
+                            Spacer()
+                        }
+                        .foregroundStyle(selection == section ? Color.accentColor : Color.primary.opacity(0.82))
+                        .padding(.horizontal, 12)
+                        .frame(height: 34)
+                        .background(selection == section ? AppPalette.selectedSurface : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(selection == section ? AppPalette.borderStrong : Color.clear, lineWidth: 1)
+                        }
+                        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 10)
+
+            Spacer()
+        }
+        .frame(minWidth: 160, maxWidth: 190, maxHeight: .infinity, alignment: .topLeading)
+        .background(AppPalette.sidebarSurface)
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(AppPalette.border)
+                .frame(width: 1)
+        }
+    }
+}
+
+private struct SettingsDetailHeader: View {
+    let section: SettingsSection
+    let isLoading: Bool
+    let refreshAction: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            Image(systemName: section.systemImage)
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 38, height: 38)
+                .background(AppPalette.selectedSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(AppPalette.borderStrong, lineWidth: 1)
+                }
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(section.title)
+                    .font(.title2.weight(.semibold))
+                Text(section.subtitle)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+            }
+
+            Button {
+                refreshAction()
+            } label: {
+                Label("刷新", systemImage: "arrow.clockwise")
+            }
+            .controlSize(.large)
+            .buttonStyle(.bordered)
+            .disabled(isLoading)
+        }
+        .padding(16)
+        .background(AppPalette.panelSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(AppPalette.border, lineWidth: 1)
+        }
+        .shadow(color: AppPalette.shadow, radius: 14, x: 0, y: 7)
+    }
+}
+
+private enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
+    case overview
+    case node
+    case jdk
+    case project
+    case profiles
+
+    var id: String {
+        rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .overview:
+            return "概览"
+        case .node:
+            return "Node"
+        case .jdk:
+            return "JDK"
+        case .project:
+            return "项目策略"
+        case .profiles:
+            return "环境配置"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .overview:
+            return "查看当前已选版本、安装路径与终端生效配置。"
+        case .node:
+            return "查询、安装、切换和卸载 ENVPilot 管理的 Node。"
+        case .jdk:
+            return "查询、安装、切换和卸载 ENVPilot 管理的 JDK。"
+        case .project:
+            return "配置进入项目目录时的版本选择规则。"
+        case .profiles:
+            return "管理 registry、NODE_OPTIONS 与自定义环境变量。"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .overview:
+            return "gauge.with.dots.needle.67percent"
+        case .node:
+            return "shippingbox"
+        case .jdk:
+            return "cup.and.saucer"
+        case .project:
+            return "folder.badge.gearshape"
+        case .profiles:
+            return "slider.horizontal.3"
+        }
+    }
+}
+
+private struct StatusBadgeModel: Identifiable {
+    let id = UUID()
     let text: String
+    let systemImage: String
+    let color: Color
+}
+
+private struct RuntimeMenuRow: View {
+    let title: String
+    let value: String
+    let detail: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(title)
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                    Text(value)
+                        .font(.subheadline.monospacedDigit().weight(.semibold))
+                }
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+    }
+}
+
+private struct QuickRuntimeMenu<Item: Identifiable>: View {
+    let title: String
+    let emptyTitle: String
+    let items: [Item]
+    let isSelected: (Item) -> Bool
+    let version: (Item) -> String
+    let path: (Item) -> String
+    let action: (Item) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            if items.isEmpty {
+                Text(emptyTitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
+            } else {
+                ForEach(items) { item in
+                    Button {
+                        action(item)
+                    } label: {
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(version(item))
+                                    .font(.subheadline)
+                                    .foregroundStyle(.primary)
+                                Text(path(item))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Spacer()
+                            if isSelected(item) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .padding(8)
+                    .background(isSelected(item) ? Color.green.opacity(0.10) : AppPalette.rowSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(isSelected(item) ? Color.green.opacity(0.34) : AppPalette.border, lineWidth: 1)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+    }
+}
+
+private struct ProgressRow: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(12)
+    }
+}
+
+private struct MessageRow: View {
+    let message: String
+    let systemImage: String
     let color: Color
 
     var body: some View {
-        Text(text)
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(color.opacity(0.18))
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: systemImage)
+                .foregroundStyle(color)
+            Text(message)
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+        }
+        .padding(12)
+    }
+}
+
+private struct ProgressBanner: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            Text(message)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(10)
+        .liquidGlassPanel(cornerRadius: 12, tint: Color.orange.opacity(0.06))
+    }
+}
+
+private struct InlineMessage: View {
+    let message: String
+    let systemImage: String
+    let color: Color
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: systemImage)
+                .foregroundStyle(color)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+        }
+        .padding(10)
+        .liquidGlassPanel(cornerRadius: 12, tint: color.opacity(0.08))
+    }
+}
+
+private struct SectionHeader: View {
+    let title: String
+    let subtitle: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.title3.weight(.semibold))
+                Text(subtitle)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct MetricTile: View {
+    let title: String
+    let value: String
+    let systemImage: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage)
+                    .foregroundStyle(.secondary)
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Text(value)
+                .font(.title3.monospacedDigit().weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(AppPalette.border, lineWidth: 1)
+        }
+    }
+}
+
+private struct PathRow: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        LabeledContent(title) {
+            Text(value)
+                .font(.callout.monospaced())
+                .textSelection(.enabled)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+}
+
+private struct RuntimeListRow: View {
+    let title: String
+    let path: String
+    let badges: [StatusBadgeModel]
+    let primaryTitle: String
+    let primarySystemImage: String
+    let destructiveTitle: String
+    let primaryAction: () -> Void
+    let destructiveAction: () -> Void
+    let isDisabled: Bool
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(.subheadline.weight(.medium))
+                    ForEach(badges) { badge in
+                        StatusBadge(text: badge.text, systemImage: badge.systemImage, color: badge.color)
+                    }
+                }
+                Text(path)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            Button {
+                primaryAction()
+            } label: {
+                Label(primaryTitle, systemImage: primarySystemImage)
+            }
+            .disabled(isDisabled)
+
+            if !destructiveTitle.isEmpty {
+                Button(role: .destructive) {
+                    destructiveAction()
+                } label: {
+                    Label(destructiveTitle, systemImage: "trash")
+                }
+                .disabled(isDisabled)
+            }
+        }
+        .padding(12)
+        .background(AppPalette.rowSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(AppPalette.border, lineWidth: 1)
+        }
+    }
+}
+
+private struct DownloadCandidateRow: View {
+    let title: String
+    let subtitle: String
+    let badges: [StatusBadgeModel]
+    let progressMessage: String?
+    let actionTitle: String
+    let actionSystemImage: String
+    let action: () -> Void
+    let isDisabled: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(.subheadline.weight(.medium))
+                    ForEach(badges) { badge in
+                        StatusBadge(text: badge.text, systemImage: badge.systemImage, color: badge.color)
+                    }
+                }
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let progressMessage, !progressMessage.isEmpty {
+                    Text(progressMessage)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.blue)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            Spacer()
+            Button {
+                action()
+            } label: {
+                Label(actionTitle, systemImage: actionSystemImage)
+            }
+            .disabled(isDisabled)
+        }
+        .padding(12)
+        .background(progressMessage == nil ? AppPalette.rowSurface : Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(progressMessage == nil ? AppPalette.border : Color.blue.opacity(0.34), lineWidth: 1)
+        }
+    }
+}
+
+private struct EmptyState: View {
+    let title: String
+    let message: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.title3)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.subheadline.weight(.medium))
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 8)
+    }
+}
+
+private struct StatusBadge: View {
+    let text: String
+    let systemImage: String
+    let color: Color
+
+    var body: some View {
+        Label(text, systemImage: systemImage)
+            .font(.caption2.weight(.medium))
+            .labelStyle(.titleAndIcon)
             .foregroundStyle(color)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background {
+                Capsule()
+                    .fill(.thinMaterial)
+                Capsule()
+                    .fill(color.opacity(0.10))
+            }
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(0.28), lineWidth: 0.8)
+            )
             .clipShape(Capsule())
     }
 }

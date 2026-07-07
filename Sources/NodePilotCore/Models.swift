@@ -34,45 +34,46 @@ public struct JavaInstallation: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
-public struct SDKMANRuntimeStatus: Codable, Hashable, Sendable {
-    public var isInstalled: Bool
-    public var canInstall: Bool
-    public var hasManagedJavaInstallations: Bool
+public struct NodeDownloadCandidate: Identifiable, Codable, Hashable, Sendable {
+    public let version: String
+    public let lts: String?
 
-    public init(
-        isInstalled: Bool = false,
-        canInstall: Bool = false,
-        hasManagedJavaInstallations: Bool = false
-    ) {
-        self.isInstalled = isInstalled
-        self.canInstall = canInstall
-        self.hasManagedJavaInstallations = hasManagedJavaInstallations
-    }
-}
-
-public struct SDKMANJavaCandidate: Identifiable, Codable, Hashable, Sendable {
-    public var vendor: String
-    public var version: String
-    public var distribution: String
-    public var identifier: String
-    public var isInstalled: Bool
-
-    public init(
-        vendor: String,
-        version: String,
-        distribution: String,
-        identifier: String,
-        isInstalled: Bool = false
-    ) {
-        self.vendor = vendor
+    public init(version: String, lts: String? = nil) {
         self.version = version
-        self.distribution = distribution
-        self.identifier = identifier
-        self.isInstalled = isInstalled
+        self.lts = lts
     }
 
     public var id: String {
-        identifier
+        version
+    }
+}
+
+public struct JavaDownloadCandidate: Identifiable, Codable, Hashable, Sendable {
+    public let featureVersion: Int
+    public let version: String
+    public let vendor: String
+    public let packageName: String
+    public let downloadURL: String
+    public let checksum: String?
+
+    public init(
+        featureVersion: Int,
+        version: String,
+        vendor: String,
+        packageName: String,
+        downloadURL: String,
+        checksum: String? = nil
+    ) {
+        self.featureVersion = featureVersion
+        self.version = version
+        self.vendor = vendor
+        self.packageName = packageName
+        self.downloadURL = downloadURL
+        self.checksum = checksum
+    }
+
+    public var id: String {
+        "\(vendor)-\(featureVersion)-\(version)"
     }
 }
 
@@ -123,26 +124,35 @@ public enum ProjectVersionPreference: String, Codable, CaseIterable, Sendable {
 
 public struct AppSettings: Codable, Sendable {
     public var selectedVersion: String?
+    public var selectedNodePath: String?
     public var selectedJavaVersion: String?
     public var selectedJavaHome: String?
     public var selectedProfileID: UUID?
     public var projectVersionPreference: ProjectVersionPreference
     public var profiles: [EnvironmentProfile]
+    public var cachedNodeInstallations: [NodeInstallation]?
+    public var cachedJavaInstallations: [JavaInstallation]?
 
     public init(
         selectedVersion: String? = nil,
+        selectedNodePath: String? = nil,
         selectedJavaVersion: String? = nil,
         selectedJavaHome: String? = nil,
         selectedProfileID: UUID? = nil,
         projectVersionPreference: ProjectVersionPreference = .followProjectFiles,
-        profiles: [EnvironmentProfile] = AppSettings.defaultProfiles
+        profiles: [EnvironmentProfile] = AppSettings.defaultProfiles,
+        cachedNodeInstallations: [NodeInstallation]? = nil,
+        cachedJavaInstallations: [JavaInstallation]? = nil
     ) {
         self.selectedVersion = selectedVersion
+        self.selectedNodePath = selectedNodePath
         self.selectedJavaVersion = selectedJavaVersion
         self.selectedJavaHome = selectedJavaHome
         self.selectedProfileID = selectedProfileID
         self.projectVersionPreference = projectVersionPreference
         self.profiles = profiles
+        self.cachedNodeInstallations = cachedNodeInstallations
+        self.cachedJavaInstallations = cachedJavaInstallations
     }
 
     public static let defaultProfiles: [EnvironmentProfile] = [
@@ -157,7 +167,6 @@ public struct NodeRuntimeSnapshot: Sendable {
     public var javaInstallations: [JavaInstallation]
     public var activeJavaVersion: String?
     public var activeJavaHome: String?
-    public var sdkmanStatus: SDKMANRuntimeStatus
     public var settings: AppSettings
 
     public init(
@@ -167,7 +176,6 @@ public struct NodeRuntimeSnapshot: Sendable {
         javaInstallations: [JavaInstallation] = [],
         activeJavaVersion: String? = nil,
         activeJavaHome: String? = nil,
-        sdkmanStatus: SDKMANRuntimeStatus = .init(),
         settings: AppSettings
     ) {
         self.installations = installations
@@ -176,7 +184,6 @@ public struct NodeRuntimeSnapshot: Sendable {
         self.javaInstallations = javaInstallations
         self.activeJavaVersion = activeJavaVersion
         self.activeJavaHome = activeJavaHome
-        self.sdkmanStatus = sdkmanStatus
         self.settings = settings
     }
 }

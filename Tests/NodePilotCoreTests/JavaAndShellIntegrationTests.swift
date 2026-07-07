@@ -18,35 +18,108 @@ final class JavaAndShellIntegrationTests: XCTestCase {
 
     func testActivationScriptExportsJavaHomeWhenSelected() {
         let integration = ShellIntegrationService()
+        let javaHome = "/Users/me/.envpilot/runtimes/java/temurin-21.jdk/Contents/Home"
         let settings = AppSettings(
             selectedJavaVersion: "21.0.4",
-            selectedJavaHome: "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home",
+            selectedJavaHome: javaHome,
             profiles: [EnvironmentProfile(name: "Default")]
         )
 
         let script = integration.renderActivationScript(settings: settings, cwd: nil, shell: .zsh)
 
         XCTAssertTrue(script.contains("export ENVPILOT_EFFECTIVE_JAVA_VERSION='21.0.4'"))
-        XCTAssertTrue(script.contains("export JAVA_HOME='/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home'"))
+        XCTAssertTrue(script.contains("export JAVA_HOME='\(javaHome)'"))
         XCTAssertTrue(script.contains("export PATH=\"$JAVA_HOME/bin:$PATH\""))
     }
 
-    func testActivationScriptUsesNVMForSelectedVersion() {
+    func testActivationScriptExportsNodeHomeForSelectedVersion() {
         let integration = ShellIntegrationService()
+        let nodeHome = "/Users/me/.envpilot/runtimes/node/14.21.3"
         let settings = AppSettings(
             selectedVersion: "14.21.3",
+            selectedNodePath: nodeHome,
             profiles: [EnvironmentProfile(name: "Default")]
         )
+        let installations = [
+            NodeInstallation(
+                version: "14.21.3",
+                installPath: nodeHome,
+                executablePath: "\(nodeHome)/bin/node"
+            )
+        ]
 
-        let script = integration.renderActivationScript(settings: settings, cwd: nil, shell: .zsh)
+        let script = integration.renderActivationScript(
+            settings: settings,
+            nodeInstallations: installations,
+            cwd: nil,
+            shell: .zsh
+        )
 
-        XCTAssertTrue(script.contains("export NVM_DIR=\"${NVM_DIR:-$HOME/.nvm}\""))
-        XCTAssertTrue(script.contains("if [ -s \"$NVM_DIR/nvm.sh\" ]; then"))
-        XCTAssertTrue(script.contains("nvm use --silent '14.21.3'"))
+        XCTAssertTrue(script.contains("export ENVPILOT_EFFECTIVE_NODE_VERSION='14.21.3'"))
+        XCTAssertTrue(script.contains("export ENVPILOT_NODE_HOME='\(nodeHome)'"))
+        XCTAssertTrue(script.contains("export PATH=\"$ENVPILOT_NODE_HOME/bin:$PATH\""))
+        XCTAssertFalse(script.contains("nvm use"))
     }
 
-    func testDetectInstallationsIncludesSDKMANCandidatesAndMarksCurrentAsDefault() throws {
-        let tempRoot = try makeTemporarySDKMANJavaHome(version: "21.0.4-tem")
+    func testActivationScriptUsesEnvPilotJavaVersionFromProjectCache() throws {
+        let integration = ShellIntegrationService()
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "JAVA_VERSION=11\n".write(
+            to: root.appendingPathComponent(".envpilot"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let java11Home = "/Users/me/.envpilot/runtimes/java/temurin-11.jdk/Contents/Home"
+        let java25Home = "/Users/me/.envpilot/runtimes/java/temurin-25.jdk/Contents/Home"
+        let settings = AppSettings(
+            selectedJavaVersion: "25.0.2",
+            selectedJavaHome: java25Home,
+            cachedJavaInstallations: [
+                JavaInstallation(version: "25.0.2", homePath: java25Home),
+                JavaInstallation(version: "11.0.31", homePath: java11Home),
+            ]
+        )
+
+        let script = integration.renderActivationScript(settings: settings, cwd: root, shell: .zsh)
+
+        XCTAssertTrue(script.contains("export ENVPILOT_EFFECTIVE_JAVA_VERSION='11'"))
+        XCTAssertTrue(script.contains("export JAVA_HOME='\(java11Home)'"))
+        XCTAssertFalse(script.contains("export JAVA_HOME='\(java25Home)'"))
+    }
+
+    func testActivationScriptDoesNotFallBackToSelectedNodeWhenProjectVersionIsMissing() throws {
+        let integration = ShellIntegrationService()
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "NODE_VERSION=18.19.0\n".write(
+            to: root.appendingPathComponent(".envpilot"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let nodeHome = "/Users/me/.envpilot/runtimes/node/24.15.0"
+        let settings = AppSettings(
+            selectedVersion: "24.15.0",
+            selectedNodePath: nodeHome,
+            cachedNodeInstallations: [
+                NodeInstallation(
+                    version: "24.15.0",
+                    installPath: nodeHome,
+                    executablePath: "\(nodeHome)/bin/node"
+                )
+            ]
+        )
+
+        let script = integration.renderActivationScript(settings: settings, cwd: root, shell: .zsh)
+
+        XCTAssertTrue(script.contains("export ENVPILOT_EFFECTIVE_NODE_VERSION='18.19.0'"))
+        XCTAssertFalse(script.contains("export ENVPILOT_NODE_HOME='\(nodeHome)'"))
+    }
+
+    func testDetectInstallationsIncludesEnvPilotManagedJDKAndMarksCurrentAsDefault() throws {
+        let tempRoot = try makeTemporaryEnvPilotJavaHome(version: "21.0.4")
         defer { try? FileManager.default.removeItem(at: tempRoot.rootURL) }
 
         let javaHome = tempRoot.javaHomeURL.path
@@ -60,7 +133,7 @@ final class JavaAndShellIntegrationTests: XCTestCase {
 
         let detector = JavaRuntimeDetector(
             shellRunner: shell,
-            environment: ["SDKMAN_CANDIDATES_DIR": tempRoot.candidatesURL.path]
+            environment: ["JAVA_HOME": javaHome, "HOME": tempRoot.homeURL.path]
         )
         let installations = detector.detectInstallations()
 
@@ -72,174 +145,25 @@ final class JavaAndShellIntegrationTests: XCTestCase {
         XCTAssertEqual(detector.detectActiveVersion(), "21.0.4")
     }
 
-    func testSDKMANJavaIdentifierFromHomePath() {
-        let home = "/Users/me/.sdkman/candidates/java/21.0.4-tem/Contents/Home"
-        XCTAssertEqual(JavaRuntimeDetector.sdkmanJavaIdentifier(fromHomePath: home), "21.0.4-tem")
-        XCTAssertNil(JavaRuntimeDetector.sdkmanJavaIdentifier(fromHomePath: "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home"))
-    }
-
-    func testParseSDKMANJavaCandidates() {
-        let output = """
-        ================================================================================
-        Available Java Versions for macOS ARM 64bit
-        ================================================================================
-         Vendor        | Use | Version      | Dist    | Status     | Identifier
-        --------------------------------------------------------------------------------
-         Temurin       |     | 21.0.10      | tem     |            | 21.0.10-tem
-                       |     | 17.0.18      | tem     |            | 17.0.18-tem
-         Zulu          |     | 17.0.18.fx   | zulu    |            | 17.0.18.fx-zulu
-        """
-
-        let candidates = RuntimeComponentInstaller.parseSDKMANJavaCandidates(from: output)
-
-        XCTAssertEqual(candidates.count, 3)
-        XCTAssertEqual(candidates[0].vendor, "Temurin")
-        XCTAssertEqual(candidates[1].vendor, "Temurin")
-        XCTAssertEqual(candidates[2].identifier, "17.0.18.fx-zulu")
-    }
-
-    func testRuntimeComponentInstallerRepairsBrokenSDKMANDirectoryBeforeInstall() throws {
-        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: tempRoot) }
-
-        let sdkmanDir = tempRoot.appendingPathComponent(".sdkman", isDirectory: true)
-        let bashPath = tempRoot.appendingPathComponent("bin/bash")
-        try FileManager.default.createDirectory(
-            at: sdkmanDir.appendingPathComponent("candidates"),
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
-        try FileManager.default.createDirectory(
-            at: bashPath.deletingLastPathComponent(),
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
-        FileManager.default.createFile(atPath: bashPath.path, contents: Data("#!/bin/zsh\n".utf8))
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bashPath.path)
-
-        let initScriptPath = sdkmanDir.appendingPathComponent("bin/sdkman-init.sh")
-        let shell = JavaDetectorMockShellRunner(
-            outputsByCommandFragment: [
-                "command -v curl": .init(
-                    standardOutput: "/usr/bin/curl\n",
-                    standardError: "",
-                    exitCode: 0
-                ),
-                "command -v bash": .init(
-                    standardOutput: "\(bashPath.path)\n",
-                    standardError: "",
-                    exitCode: 0
-                ),
-                "'\(bashPath.path)' --version": .init(
-                    standardOutput: "GNU bash, version 5.2.37(1)-release (aarch64-apple-darwin)\n",
-                    standardError: "",
-                    exitCode: 0
-                ),
-                "curl -fsSL https://get.sdkman.io | '\(bashPath.path)'": .init(
-                    standardOutput: "",
-                    standardError: "",
-                    exitCode: 0
-                )
-            ],
-            onRunShell: { command, environment in
-                if command.contains("curl -fsSL https://get.sdkman.io |") {
-                    try FileManager.default.createDirectory(
-                        at: initScriptPath.deletingLastPathComponent(),
-                        withIntermediateDirectories: true,
-                        attributes: nil
-                    )
-                    FileManager.default.createFile(atPath: initScriptPath.path, contents: Data("#!/bin/zsh\n".utf8))
-                }
-            }
-        )
-        let installer = RuntimeComponentInstaller(
-            shellRunner: shell,
-            environment: [
-                "HOME": tempRoot.path,
-                "SDKMAN_DIR": sdkmanDir.path,
-            ]
-        )
-
-        try installer.installSDKMAN()
-
-        XCTAssertTrue(FileManager.default.fileExists(atPath: initScriptPath.path))
-        let backups = try FileManager.default.contentsOfDirectory(atPath: tempRoot.path).filter { $0.hasPrefix(".sdkman.broken-") }
-        XCTAssertEqual(backups.count, 1)
-    }
-
-    func testRuntimeComponentInstallerThrowsWhenSDKMANInstallRemainsIncomplete() throws {
-        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: tempRoot) }
-
-        let sdkmanDir = tempRoot.appendingPathComponent(".sdkman", isDirectory: true)
-        let bashPath = tempRoot.appendingPathComponent("bin/bash")
-        try FileManager.default.createDirectory(
-            at: sdkmanDir.appendingPathComponent("tmp"),
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
-        try FileManager.default.createDirectory(
-            at: bashPath.deletingLastPathComponent(),
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
-        FileManager.default.createFile(atPath: bashPath.path, contents: Data("#!/bin/zsh\n".utf8))
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bashPath.path)
-
-        let shell = JavaDetectorMockShellRunner(outputsByCommandFragment: [
-            "command -v curl": .init(
-                standardOutput: "/usr/bin/curl\n",
-                standardError: "",
-                exitCode: 0
-            ),
-            "command -v bash": .init(
-                standardOutput: "\(bashPath.path)\n",
-                standardError: "",
-                exitCode: 0
-            ),
-            "'\(bashPath.path)' --version": .init(
-                standardOutput: "GNU bash, version 5.2.37(1)-release (aarch64-apple-darwin)\n",
-                standardError: "",
-                exitCode: 0
-            ),
-            "curl -fsSL https://get.sdkman.io | '\(bashPath.path)'": .init(
-                standardOutput: "",
-                standardError: "",
-                exitCode: 0
-            )
-        ])
-        let installer = RuntimeComponentInstaller(
-            shellRunner: shell,
-            environment: [
-                "HOME": tempRoot.path,
-                "SDKMAN_DIR": sdkmanDir.path,
-            ]
-        )
-
-        XCTAssertThrowsError(try installer.installSDKMAN()) { error in
-            guard case RuntimeComponentInstallerError.sdkmanInstallIncomplete(let initScriptPath, let repairedBackupPath) = error else {
-                return XCTFail("Unexpected error: \(error)")
-            }
-            XCTAssertTrue(initScriptPath.hasSuffix(".sdkman/bin/sdkman-init.sh"))
-            XCTAssertNotNil(repairedBackupPath)
-        }
-    }
-
-    private func makeTemporarySDKMANJavaHome(version: String) throws -> (rootURL: URL, candidatesURL: URL, javaHomeURL: URL) {
+    private func makeTemporaryEnvPilotJavaHome(version: String) throws -> (rootURL: URL, homeURL: URL, javaHomeURL: URL) {
         let rootURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let candidatesURL = rootURL.appendingPathComponent("java", isDirectory: true)
-        let javaHomeURL = candidatesURL.appendingPathComponent(version, isDirectory: true)
+        let homeURL = rootURL.appendingPathComponent("home", isDirectory: true)
+        let javaHomeURL = homeURL
+            .appendingPathComponent(".envpilot/runtimes/java/temurin-\(version).jdk/Contents/Home", isDirectory: true)
         let javaBinURL = javaHomeURL.appendingPathComponent("bin/java")
 
         try FileManager.default.createDirectory(at: javaBinURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: javaBinURL.path, contents: Data("#!/bin/zsh\n".utf8))
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: javaBinURL.path)
-        try FileManager.default.createSymbolicLink(
-            at: candidatesURL.appendingPathComponent("current"),
-            withDestinationURL: javaHomeURL
-        )
 
-        return (rootURL, candidatesURL, javaHomeURL)
+        return (rootURL, homeURL, javaHomeURL)
+    }
+
+    private func makeTemporaryDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
     }
 }
 

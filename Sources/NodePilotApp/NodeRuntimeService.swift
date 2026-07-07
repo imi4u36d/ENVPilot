@@ -3,14 +3,13 @@ import ENVPilotCore
 
 protocol NodeRuntimeServicing: Sendable {
     func loadSnapshot(progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
+    func listAvailableNodeVersions(ltsOnly: Bool) throws -> [NodeDownloadCandidate]
+    func listAvailableJavaVersions(ltsOnly: Bool) throws -> [JavaDownloadCandidate]
     func setDefaultNode(version: String, progress: (@Sendable (String) -> Void)?) throws
     func installNode(version: String, progress: (@Sendable (String) -> Void)?) throws
     func uninstallNode(version: String, progress: (@Sendable (String) -> Void)?) throws
-    func installSDKMAN(progress: (@Sendable (String) -> Void)?) throws
-    func listAvailableJavaCandidatesWithSDKMAN() throws -> [SDKMANJavaCandidate]
-    func installJavaWithSDKMAN(identifier: String, progress: (@Sendable (String) -> Void)?) throws
+    func installJava(featureVersion: Int, progress: (@Sendable (String) -> Void)?) throws
     func uninstallJava(homePath: String, progress: (@Sendable (String) -> Void)?) throws
-    func uninstallJavaWithSDKMAN(identifier: String, progress: (@Sendable (String) -> Void)?) throws
     func setDefaultJava(version: String, homePath: String) throws
     func setSelectedProfile(id: UUID) throws
     func saveProfile(_ profile: EnvironmentProfile) throws
@@ -37,6 +36,14 @@ struct LocalNodeRuntimeService: NodeRuntimeServicing {
         try environmentService.loadSnapshot(progress: progress)
     }
 
+    func listAvailableNodeVersions(ltsOnly: Bool) throws -> [NodeDownloadCandidate] {
+        try environmentService.listAvailableNodeVersions(ltsOnly: ltsOnly)
+    }
+
+    func listAvailableJavaVersions(ltsOnly: Bool) throws -> [JavaDownloadCandidate] {
+        try environmentService.listAvailableJavaVersions(ltsOnly: ltsOnly)
+    }
+
     func setDefaultNode(version: String, progress: (@Sendable (String) -> Void)? = nil) throws {
         _ = try environmentService.selectDefaultNode(version: version, progress: progress)
     }
@@ -49,24 +56,12 @@ struct LocalNodeRuntimeService: NodeRuntimeServicing {
         _ = try environmentService.uninstallNode(version: version, progress: progress)
     }
 
-    func installSDKMAN(progress: (@Sendable (String) -> Void)? = nil) throws {
-        _ = try environmentService.installSDKMAN(progress: progress)
-    }
-
-    func listAvailableJavaCandidatesWithSDKMAN() throws -> [SDKMANJavaCandidate] {
-        try environmentService.listAvailableJavaCandidatesWithSDKMAN()
-    }
-
-    func installJavaWithSDKMAN(identifier: String, progress: (@Sendable (String) -> Void)? = nil) throws {
-        _ = try environmentService.installJavaWithSDKMAN(identifier: identifier, progress: progress)
+    func installJava(featureVersion: Int, progress: (@Sendable (String) -> Void)? = nil) throws {
+        _ = try environmentService.installJava(featureVersion: featureVersion, progress: progress)
     }
 
     func uninstallJava(homePath: String, progress: (@Sendable (String) -> Void)? = nil) throws {
         _ = try environmentService.uninstallJava(homePath: homePath, progress: progress)
-    }
-
-    func uninstallJavaWithSDKMAN(identifier: String, progress: (@Sendable (String) -> Void)? = nil) throws {
-        _ = try environmentService.uninstallJavaWithSDKMAN(identifier: identifier, progress: progress)
     }
 
     func setDefaultJava(version: String, homePath: String) throws {

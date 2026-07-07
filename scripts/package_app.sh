@@ -12,6 +12,7 @@ DMG_PATH="$ROOT_DIR/dist/${APP_NAME}.dmg"
 BIN_DIR="$ROOT_DIR/.build/${BUILD_CONFIG}"
 APP_BIN="$BIN_DIR/ENVPilotApp"
 HELPER_BIN="$BIN_DIR/envpilot-helper"
+APP_ICON="$ROOT_DIR/Resources/AppIcon.icns"
 
 echo "Building ENVPilot ($BUILD_CONFIG)..."
 cd "$ROOT_DIR"
@@ -31,12 +32,18 @@ if [[ ! -x "$HELPER_BIN" ]]; then
   exit 1
 fi
 
+if [[ ! -f "$APP_ICON" ]]; then
+  echo "Missing app icon: $APP_ICON" >&2
+  exit 1
+fi
+
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Resources/bin"
 
 cp "$APP_BIN" "$APP_BUNDLE/Contents/MacOS/ENVPilotApp"
 cp "$HELPER_BIN" "$APP_BUNDLE/Contents/Resources/bin/envpilot-helper"
+cp "$APP_ICON" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 chmod +x "$APP_BUNDLE/Contents/MacOS/ENVPilotApp"
 chmod +x "$APP_BUNDLE/Contents/Resources/bin/envpilot-helper"
 
@@ -49,6 +56,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
   <string>en</string>
   <key>CFBundleExecutable</key>
   <string>ENVPilotApp</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
   <string>com.envpilot.app</string>
   <key>CFBundleInfoDictionaryVersion</key>
@@ -63,8 +72,6 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
   <string>1</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
-  <key>LSUIElement</key>
-  <true/>
   <key>NSHighResolutionCapable</key>
   <true/>
 </dict>

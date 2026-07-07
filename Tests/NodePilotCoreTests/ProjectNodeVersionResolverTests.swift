@@ -9,32 +9,39 @@ final class ProjectNodeVersionResolverTests: XCTestCase {
         XCTAssertNil(resolver.resolveVersion(startingAt: url))
     }
 
-    func testResolveVersionTrimsWhitespaceInNVMRC() throws {
+    func testResolveVersionReadsEnvPilotNodeVersion() throws {
         let resolver = ProjectNodeVersionResolver()
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
 
-        try "  v20.11.1  \n".write(
-            to: root.appendingPathComponent(".nvmrc"),
+        try """
+        # ENVPilot project runtime
+        NODE_VERSION=24.15.0
+        JAVA_VERSION=25
+        """.write(
+            to: root.appendingPathComponent(".envpilot"),
             atomically: true,
             encoding: .utf8
         )
 
-        XCTAssertEqual(resolver.resolveVersion(startingAt: root), "v20.11.1")
+        XCTAssertEqual(resolver.resolveVersion(startingAt: root), "24.15.0")
     }
 
-    func testResolveVersionFallsBackToNodeVersion() throws {
-        let resolver = ProjectNodeVersionResolver()
+    func testResolveJavaVersionReadsEnvPilotJavaVersion() throws {
+        let resolver = ProjectJavaVersionResolver()
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
 
-        try "18.19.0\n".write(
-            to: root.appendingPathComponent(".node-version"),
+        try """
+        NODE_VERSION=24.15.0
+        JAVA_VERSION="11"
+        """.write(
+            to: root.appendingPathComponent(".envpilot"),
             atomically: true,
             encoding: .utf8
         )
 
-        XCTAssertEqual(resolver.resolveVersion(startingAt: root), "18.19.0")
+        XCTAssertEqual(resolver.resolveVersion(startingAt: root), "11")
     }
 
     func testResolveVersionWalksParentDirectories() throws {
@@ -46,8 +53,8 @@ final class ProjectNodeVersionResolverTests: XCTestCase {
             .appendingPathComponent("a", isDirectory: true)
             .appendingPathComponent("b", isDirectory: true)
         try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
-        try "24.1.0\n".write(
-            to: root.appendingPathComponent(".nvmrc"),
+        try "NODE_VERSION=24.1.0\n".write(
+            to: root.appendingPathComponent(".envpilot"),
             atomically: true,
             encoding: .utf8
         )
@@ -60,8 +67,8 @@ final class ProjectNodeVersionResolverTests: XCTestCase {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
 
-        try "\n# comment\n   \n22.4.1\n".write(
-            to: root.appendingPathComponent(".nvmrc"),
+        try "\n# comment\n   \nNODE_VERSION=22.4.1\n".write(
+            to: root.appendingPathComponent(".envpilot"),
             atomically: true,
             encoding: .utf8
         )
@@ -76,13 +83,13 @@ final class ProjectNodeVersionResolverTests: XCTestCase {
 
         let child = root.appendingPathComponent("child", isDirectory: true)
         try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
-        try "20.10.0\n".write(
-            to: root.appendingPathComponent(".nvmrc"),
+        try "NODE_VERSION=20.10.0\n".write(
+            to: root.appendingPathComponent(".envpilot"),
             atomically: true,
             encoding: .utf8
         )
-        try "18.17.1\n".write(
-            to: child.appendingPathComponent(".node-version"),
+        try "NODE_VERSION=18.17.1\n".write(
+            to: child.appendingPathComponent(".envpilot"),
             atomically: true,
             encoding: .utf8
         )

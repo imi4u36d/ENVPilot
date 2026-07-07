@@ -2,16 +2,16 @@ import XCTest
 @testable import ENVPilotCore
 
 final class NodeEnvironmentServiceTests: XCTestCase {
-    func testSelectDefaultNodePersistsVersionAndAppliesNVMCommand() throws {
+    func testSelectDefaultNodePersistsVersionAndPathWithoutExternalCommand() throws {
         let store = InMemoryStore(settings: AppSettings())
         let shell = MockShellRunner()
+        let nodePath = "/Users/me/.envpilot/runtimes/node/20.11.1"
         let detector = MockDetector(
-            nvmInstalled: true,
             installations: [
                 NodeInstallation(
                     version: "20.11.1",
-                    installPath: "/Users/me/.nvm/versions/node/v20.11.1",
-                    executablePath: "/Users/me/.nvm/versions/node/v20.11.1/bin/node"
+                    installPath: nodePath,
+                    executablePath: "\(nodePath)/bin/node"
                 )
             ],
             activeVersion: "18.19.0",
@@ -28,21 +28,16 @@ final class NodeEnvironmentServiceTests: XCTestCase {
         let snapshot = try service.selectDefaultNode(version: "v20.11.1")
 
         XCTAssertEqual(snapshot.settings.selectedVersion, "20.11.1")
-        XCTAssertTrue(shell.commands.contains { $0.contains("nvm alias default '20.11.1'") })
+        XCTAssertEqual(snapshot.settings.selectedNodePath, nodePath)
+        XCTAssertFalse(shell.commands.contains { $0.contains("nvm alias default") })
     }
 
-    func testInstallNodeRunsNVMInstallAndPersistsSelection() throws {
+    func testInstallNodeUsesManagedInstallerAndPersistsSelection() throws {
         let store = InMemoryStore(settings: AppSettings())
         let shell = MockShellRunner()
+        let installer = MockInstaller()
         let detector = MockDetector(
-            nvmInstalled: true,
-            installations: [
-                NodeInstallation(
-                    version: "20.11.1",
-                    installPath: "/Users/me/.nvm/versions/node/v20.11.1",
-                    executablePath: "/Users/me/.nvm/versions/node/v20.11.1/bin/node"
-                )
-            ],
+            installations: [],
             activeVersion: nil,
             activeNodePath: nil
         )
@@ -50,84 +45,48 @@ final class NodeEnvironmentServiceTests: XCTestCase {
             configStore: store,
             detector: detector,
             javaDetector: MockJavaDetector(),
-            componentInstaller: MockInstaller(),
+            componentInstaller: installer,
             shellRunner: shell
         )
 
         let snapshot = try service.installNode(version: "20.11.1")
 
         XCTAssertEqual(snapshot.settings.selectedVersion, "20.11.1")
-        XCTAssertTrue(shell.commands.contains { $0.contains("nvm install '20.11.1'") })
+        XCTAssertEqual(snapshot.settings.selectedNodePath, "/Users/me/.envpilot/runtimes/node/20.11.1")
+        XCTAssertEqual(installer.operations, ["install-node:20.11.1"])
+        XCTAssertFalse(shell.commands.contains { $0.contains("nvm install") })
     }
 
-    func testInstallNodeAcceptsMajorVersionAndPersistsResolvedVersion() throws {
+    func testInstallNodeAcceptsMajorVersionSpec() throws {
         let store = InMemoryStore(settings: AppSettings())
-        let shell = MockShellRunner(outputsByCommandFragment: [
-            "nvm install '24'": .init(
-                standardOutput: "Now using node v24.11.1 (npm v11.6.2)\nv24.11.1\n",
-                standardError: "",
-                exitCode: 0
-            )
-        ])
+        let shell = MockShellRunner()
+        let installer = MockInstaller()
         let detector = MockDetector(
-            nvmInstalled: true,
-            installations: [
-                NodeInstallation(
-                    version: "24.11.1",
-                    installPath: "/Users/me/.nvm/versions/node/v24.11.1",
-                    executablePath: "/Users/me/.nvm/versions/node/v24.11.1/bin/node"
-                )
-            ],
-            activeVersion: "24.11.1",
-            activeNodePath: "/Users/me/.nvm/versions/node/v24.11.1/bin/node"
+            installations: [],
+            activeVersion: nil,
+            activeNodePath: nil
         )
         let service = NodeEnvironmentService(
             configStore: store,
             detector: detector,
             javaDetector: MockJavaDetector(),
-            componentInstaller: MockInstaller(),
+            componentInstaller: installer,
             shellRunner: shell
         )
 
         let snapshot = try service.installNode(version: "24")
 
-        XCTAssertEqual(snapshot.settings.selectedVersion, "24.11.1")
-        XCTAssertTrue(shell.commands.contains { $0.contains("nvm install '24'") })
+        XCTAssertEqual(snapshot.settings.selectedVersion, "24")
+        XCTAssertEqual(installer.operations, ["install-node:24"])
     }
 
-    func testInstallNodeRetriesWithRosettaWhenArm64BinaryIsUnavailable() throws {
+    func testInstallNodeDoesNotUseExternalInstallerOrRosetta() throws {
         let store = InMemoryStore(settings: AppSettings())
-        let shell = MockShellRunner(
-            outputsByCommandFragment: [
-                "nvm install '14.21.3'": .init(
-                    standardOutput: "",
-                    standardError: """
-                    Downloading https://nodejs.org/dist/v14.21.3/node-v14.21.3-darwin-arm64.tar.xz...
-                    curl: (56) The requested URL returned error: 404
-                    Binary download failed, trying source.
-                    """,
-                    exitCode: 3
-                )
-            ],
-            outputsByRunCommandFragment: [
-                "/usr/bin/arch -x86_64 /bin/zsh -lc": .init(
-                    standardOutput: "Now using node v14.21.3 (npm v6.14.18)\nv14.21.3\n",
-                    standardError: "",
-                    exitCode: 0
-                )
-            ]
-        )
+        let shell = MockShellRunner()
         let detector = MockDetector(
-            nvmInstalled: true,
-            installations: [
-                NodeInstallation(
-                    version: "14.21.3",
-                    installPath: "/Users/me/.nvm/versions/node/v14.21.3",
-                    executablePath: "/Users/me/.nvm/versions/node/v14.21.3/bin/node"
-                )
-            ],
-            activeVersion: "14.21.3",
-            activeNodePath: "/Users/me/.nvm/versions/node/v14.21.3/bin/node"
+            installations: [],
+            activeVersion: nil,
+            activeNodePath: nil
         )
         let service = NodeEnvironmentService(
             configStore: store,
@@ -140,20 +99,21 @@ final class NodeEnvironmentServiceTests: XCTestCase {
         let snapshot = try service.installNode(version: "14.21.3")
 
         XCTAssertEqual(snapshot.settings.selectedVersion, "14.21.3")
-        XCTAssertTrue(shell.commands.contains { $0.contains("nvm install '14.21.3'") })
-        XCTAssertTrue(shell.executedLaunchCommands.contains { $0.contains("/usr/bin/arch -x86_64 /bin/zsh -lc") })
+        XCTAssertFalse(shell.commands.contains { $0.contains("nvm install") })
+        XCTAssertFalse(shell.executedLaunchCommands.contains { $0.contains("/usr/bin/arch -x86_64 /bin/zsh -lc") })
     }
 
     func testUninstallNodeClearsSelectionWhenRemovingSelectedVersion() throws {
-        let store = InMemoryStore(settings: AppSettings(selectedVersion: "20.11.1"))
+        let nodePath = "/Users/me/.envpilot/runtimes/node/20.11.1"
+        let store = InMemoryStore(settings: AppSettings(selectedVersion: "20.11.1", selectedNodePath: nodePath))
         let shell = MockShellRunner()
+        let installer = MockInstaller()
         let detector = MockDetector(
-            nvmInstalled: true,
             installations: [
                 NodeInstallation(
                     version: "20.11.1",
-                    installPath: "/Users/me/.nvm/versions/node/v20.11.1",
-                    executablePath: "/Users/me/.nvm/versions/node/v20.11.1/bin/node"
+                    installPath: nodePath,
+                    executablePath: "\(nodePath)/bin/node"
                 )
             ],
             activeVersion: "20.11.1",
@@ -163,22 +123,24 @@ final class NodeEnvironmentServiceTests: XCTestCase {
             configStore: store,
             detector: detector,
             javaDetector: MockJavaDetector(),
-            componentInstaller: MockInstaller(),
+            componentInstaller: installer,
             shellRunner: shell
         )
 
         let snapshot = try service.uninstallNode(version: "20.11.1")
 
         XCTAssertNil(snapshot.settings.selectedVersion)
-        XCTAssertTrue(shell.commands.contains { $0.contains("nvm uninstall '20.11.1'") })
+        XCTAssertNil(snapshot.settings.selectedNodePath)
+        XCTAssertEqual(installer.operations, ["uninstall-node:20.11.1"])
+        XCTAssertFalse(shell.commands.contains { $0.contains("nvm uninstall") })
     }
 
-    func testLoadSnapshotAutoInstallsNVMWhenMissing() throws {
+    func testLoadSnapshotDoesNotAutoInstallRuntimeManagerWhenMissing() throws {
         let store = InMemoryStore(settings: AppSettings())
         let installer = MockInstaller()
         let service = NodeEnvironmentService(
             configStore: store,
-            detector: MockDetector(nvmInstalled: false, installations: [], activeVersion: nil, activeNodePath: nil),
+            detector: MockDetector(installations: [], activeVersion: nil, activeNodePath: nil),
             javaDetector: MockJavaDetector(),
             componentInstaller: installer,
             shellRunner: MockShellRunner()
@@ -186,15 +148,15 @@ final class NodeEnvironmentServiceTests: XCTestCase {
 
         _ = try service.loadSnapshot()
 
-        XCTAssertEqual(installer.operations, ["install-nvm"])
+        XCTAssertEqual(installer.operations, [])
     }
 
-    func testLoadSnapshotAutoInstallsHomebrewThenNVMWhenBothMissing() throws {
+    func testLoadSnapshotDoesNotAutoInstallRuntimeManagersWhenMissing() throws {
         let store = InMemoryStore(settings: AppSettings())
-        let installer = MockInstaller(homebrewInstalled: false)
+        let installer = MockInstaller()
         let service = NodeEnvironmentService(
             configStore: store,
-            detector: MockDetector(nvmInstalled: false, installations: [], activeVersion: nil, activeNodePath: nil),
+            detector: MockDetector(installations: [], activeVersion: nil, activeNodePath: nil),
             javaDetector: MockJavaDetector(),
             componentInstaller: installer,
             shellRunner: MockShellRunner()
@@ -202,14 +164,14 @@ final class NodeEnvironmentServiceTests: XCTestCase {
 
         _ = try service.loadSnapshot()
 
-        XCTAssertEqual(installer.operations, ["install-homebrew", "install-nvm"])
+        XCTAssertEqual(installer.operations, [])
     }
 
-    func testLoadSnapshotDoesNotFailWhenAutomaticNVMInstallFails() throws {
+    func testLoadSnapshotDoesNotFailWhenRuntimeManagerInstallIsUnavailable() throws {
         let store = InMemoryStore(settings: AppSettings())
         let service = NodeEnvironmentService(
             configStore: store,
-            detector: MockDetector(nvmInstalled: false, installations: [], activeVersion: "24.1.0", activeNodePath: "/usr/local/bin/node"),
+            detector: MockDetector(installations: [], activeVersion: "24.1.0", activeNodePath: "/usr/local/bin/node"),
             javaDetector: MockJavaDetector(),
             componentInstaller: FailingInstaller(),
             shellRunner: MockShellRunner()
@@ -217,40 +179,84 @@ final class NodeEnvironmentServiceTests: XCTestCase {
 
         let snapshot = try service.loadSnapshot()
 
-        XCTAssertEqual(snapshot.activeVersion, "24.1.0")
-        XCTAssertEqual(snapshot.activeNodePath, "/usr/local/bin/node")
+        XCTAssertNil(snapshot.activeVersion)
+        XCTAssertNil(snapshot.activeNodePath)
     }
 
-    func testLoadSnapshotIncludesSDKMANStatus() throws {
-        let store = InMemoryStore(settings: AppSettings())
-        let javaHome = "/Users/me/.sdkman/candidates/java/21.0.4-tem"
-        let installer = MockInstaller(sdkmanInstalled: false, canInstallSDKMAN: true)
+    func testLoadSnapshotDeduplicatesNodeVersionsAndKeepsSelectedPath() throws {
+        let selectedPath = "/Users/me/.envpilot/runtimes/node/24.15.0"
+        let otherPath = "/Users/me/.envpilot/runtimes/node/24.15.0-copy"
+        let store = InMemoryStore(settings: AppSettings(selectedVersion: "24.15.0", selectedNodePath: selectedPath))
         let service = NodeEnvironmentService(
             configStore: store,
-            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
-            javaDetector: MockJavaDetector(
-                installations: [JavaInstallation(version: "21.0.4", homePath: javaHome)],
-                activeVersion: "21.0.4",
-                activeJavaHome: javaHome
+            detector: MockDetector(
+                installations: [
+                    NodeInstallation(
+                        version: "24.15.0",
+                        installPath: otherPath,
+                        executablePath: "\(otherPath)/bin/node"
+                    ),
+                    NodeInstallation(
+                        version: "24.15.0",
+                        installPath: selectedPath,
+                        executablePath: "\(selectedPath)/bin/node"
+                    ),
+                ],
+                activeVersion: "24.15.0",
+                activeNodePath: "\(otherPath)/bin/node"
             ),
-            componentInstaller: installer,
+            javaDetector: MockJavaDetector(),
+            componentInstaller: MockInstaller(),
             shellRunner: MockShellRunner()
         )
 
         let snapshot = try service.loadSnapshot()
 
-        XCTAssertEqual(snapshot.sdkmanStatus.isInstalled, false)
-        XCTAssertEqual(snapshot.sdkmanStatus.canInstall, true)
-        XCTAssertEqual(snapshot.sdkmanStatus.hasManagedJavaInstallations, true)
+        XCTAssertEqual(snapshot.installations.map(\.version), ["24.15.0"])
+        XCTAssertEqual(snapshot.installations.first?.installPath, selectedPath)
+        XCTAssertEqual(store.settings.cachedNodeInstallations?.first?.installPath, selectedPath)
     }
 
-    func testInstallJavaWithSDKMANAutoInstallsSDKMANAndDoesNotSetDefault() throws {
+    func testLoadSnapshotDeduplicatesNodeVersionsAndKeepsActivePathWhenUnselected() throws {
+        let inactivePath = "/Users/me/.envpilot/runtimes/node/24.15.0"
+        let activePath = "/Users/me/.envpilot/runtimes/node/24.15.0-active"
         let store = InMemoryStore(settings: AppSettings())
-        let javaHome = "/Users/me/.sdkman/candidates/java/21.0.4-tem"
-        let installer = MockInstaller(sdkmanInstalled: false, canInstallSDKMAN: true)
         let service = NodeEnvironmentService(
             configStore: store,
-            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
+            detector: MockDetector(
+                installations: [
+                    NodeInstallation(
+                        version: "24.15.0",
+                        installPath: inactivePath,
+                        executablePath: "\(inactivePath)/bin/node"
+                    ),
+                    NodeInstallation(
+                        version: "24.15.0",
+                        installPath: activePath,
+                        executablePath: "\(activePath)/bin/node"
+                    ),
+                ],
+                activeVersion: "24.15.0",
+                activeNodePath: "\(activePath)/bin/node"
+            ),
+            javaDetector: MockJavaDetector(),
+            componentInstaller: MockInstaller(),
+            shellRunner: MockShellRunner()
+        )
+
+        let snapshot = try service.loadSnapshot()
+
+        XCTAssertEqual(snapshot.installations.map(\.version), ["24.15.0"])
+        XCTAssertEqual(snapshot.installations.first?.installPath, activePath)
+    }
+
+    func testInstallJavaUsesManagedInstallerAndPersistsSelection() throws {
+        let store = InMemoryStore(settings: AppSettings())
+        let installer = MockInstaller()
+        let javaHome = "/Users/me/.envpilot/runtimes/java/temurin-21.jdk/Contents/Home"
+        let service = NodeEnvironmentService(
+            configStore: store,
+            detector: MockDetector(installations: [], activeVersion: nil, activeNodePath: nil),
             javaDetector: MockJavaDetector(
                 installations: [JavaInstallation(version: "21.0.4", homePath: javaHome, isDefault: true)],
                 activeVersion: "21.0.4",
@@ -260,25 +266,22 @@ final class NodeEnvironmentServiceTests: XCTestCase {
             shellRunner: MockShellRunner()
         )
 
-        let snapshot = try service.installJavaWithSDKMAN(identifier: "21.0.4-tem")
+        let snapshot = try service.installJava(featureVersion: 21, progress: nil)
 
-        XCTAssertEqual(installer.operations, [
-            "install-sdkman",
-            "install-sdkman-java:21.0.4-tem",
-        ])
-        XCTAssertNil(snapshot.settings.selectedJavaVersion)
-        XCTAssertNil(snapshot.settings.selectedJavaHome)
+        XCTAssertEqual(installer.operations, ["install-java:21"])
+        XCTAssertEqual(snapshot.settings.selectedJavaVersion, "21.0.0")
+        XCTAssertEqual(snapshot.settings.selectedJavaHome, javaHome)
         XCTAssertEqual(snapshot.activeJavaVersion, "21.0.4")
         XCTAssertEqual(snapshot.activeJavaHome, javaHome)
     }
 
-    func testSelectDefaultJavaSyncsSDKMANDefaultWhenSDKMANHomeSelected() throws {
+    func testSelectDefaultJavaPersistsHomeWithoutExternalCommand() throws {
         let store = InMemoryStore(settings: AppSettings())
-        let javaHome = "/Users/me/.sdkman/candidates/java/17.0.16-tem"
-        let installer = MockInstaller(sdkmanInstalled: true)
+        let javaHome = "/Users/me/.envpilot/runtimes/java/temurin-17.jdk/Contents/Home"
+        let installer = MockInstaller()
         let service = NodeEnvironmentService(
             configStore: store,
-            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
+            detector: MockDetector(installations: [], activeVersion: nil, activeNodePath: nil),
             javaDetector: MockJavaDetector(
                 installations: [JavaInstallation(version: "17.0.16", homePath: javaHome)],
                 activeVersion: "17.0.16",
@@ -290,141 +293,36 @@ final class NodeEnvironmentServiceTests: XCTestCase {
 
         let snapshot = try service.selectDefaultJava(version: "17.0.16", homePath: javaHome)
 
-        XCTAssertTrue(installer.operations.contains("sdkman-default-java:17.0.16-tem"))
+        XCTAssertEqual(installer.operations, [])
         XCTAssertEqual(snapshot.settings.selectedJavaVersion, "17.0.16")
         XCTAssertEqual(snapshot.settings.selectedJavaHome, javaHome)
     }
 
-    func testListAvailableJavaCandidatesWithSDKMANMarksInstalledCandidates() throws {
+    func testListAvailableJavaVersionsUsesManagedInstaller() throws {
         let store = InMemoryStore(settings: AppSettings())
-        let javaHome = "/Users/me/.sdkman/candidates/java/17.0.16-tem"
-        let installer = MockInstaller(
-            sdkmanInstalled: true,
-            availableJavaCandidates: [
-                SDKMANJavaCandidate(vendor: "Temurin", version: "17.0.16", distribution: "tem", identifier: "17.0.16-tem"),
-                SDKMANJavaCandidate(vendor: "Zulu", version: "21.0.10", distribution: "zulu", identifier: "21.0.10-zulu"),
-            ]
-        )
+        let installer = MockInstaller()
         let service = NodeEnvironmentService(
             configStore: store,
-            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
-            javaDetector: MockJavaDetector(
-                installations: [JavaInstallation(version: "17.0.16", homePath: javaHome)],
-                activeVersion: "17.0.16",
-                activeJavaHome: javaHome
-            ),
-            componentInstaller: installer,
-            shellRunner: MockShellRunner()
-        )
-
-        let candidates = try service.listAvailableJavaCandidatesWithSDKMAN()
-
-        XCTAssertEqual(candidates.count, 2)
-        XCTAssertEqual(candidates[0].isInstalled, true)
-        XCTAssertEqual(candidates[1].isInstalled, false)
-    }
-
-    func testUninstallJavaWithSDKMANClearsSelectedJavaWhenRemovingSelectedIdentifier() throws {
-        let javaHome = "/Users/me/.sdkman/candidates/java/17.0.16-tem"
-        let store = InMemoryStore(settings: AppSettings(selectedJavaVersion: "17.0.16", selectedJavaHome: javaHome))
-        let installer = MockInstaller(sdkmanInstalled: true)
-        let service = NodeEnvironmentService(
-            configStore: store,
-            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
+            detector: MockDetector(installations: [], activeVersion: nil, activeNodePath: nil),
             javaDetector: MockJavaDetector(),
             componentInstaller: installer,
             shellRunner: MockShellRunner()
         )
 
-        let snapshot = try service.uninstallJavaWithSDKMAN(identifier: "17.0.16-tem", progress: nil)
+        let candidates = try service.listAvailableJavaVersions()
 
-        XCTAssertTrue(installer.operations.contains("sdkman-uninstall-java:17.0.16-tem"))
-        XCTAssertNil(snapshot.settings.selectedJavaVersion)
-        XCTAssertNil(snapshot.settings.selectedJavaHome)
+        XCTAssertEqual(candidates.map(\.featureVersion), [21])
     }
 
-    func testUninstallJavaWithSDKMANRetriesAfterSwitchingDefaultWhenTargetIsInUse() throws {
-        let targetHome = "/Users/me/.sdkman/candidates/java/11.0.25-tem"
-        let fallbackHome = "/Users/me/.sdkman/candidates/java/17.0.16-tem"
-        let store = InMemoryStore(settings: AppSettings(selectedJavaVersion: "11.0.25", selectedJavaHome: targetHome))
-        let installer = RetryingSDKMANInstaller(identifierToFailFirst: "11.0.25-tem")
+    func testUninstallJavaUsesManagedInstallerAndClearsSelection() throws {
+        let javaHome = "/Users/me/.envpilot/runtimes/java/temurin-17.jdk/Contents/Home"
+        let store = InMemoryStore(settings: AppSettings(selectedJavaVersion: "17.0.16", selectedJavaHome: javaHome))
+        let installer = MockInstaller()
         let service = NodeEnvironmentService(
             configStore: store,
-            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
+            detector: MockDetector(installations: [], activeVersion: nil, activeNodePath: nil),
             javaDetector: MockJavaDetector(
-                installations: [
-                    JavaInstallation(version: "17.0.16", homePath: fallbackHome),
-                    JavaInstallation(version: "11.0.25", homePath: targetHome),
-                ],
-                activeVersion: "17.0.16",
-                activeJavaHome: fallbackHome
-            ),
-            componentInstaller: installer,
-            shellRunner: MockShellRunner()
-        )
-
-        let snapshot = try service.uninstallJavaWithSDKMAN(identifier: "11.0.25-tem", progress: nil)
-
-        XCTAssertEqual(
-            installer.operations,
-            [
-                "sdkman-uninstall-java:11.0.25-tem",
-                "sdkman-default-java:17.0.16-tem",
-                "sdkman-uninstall-java:11.0.25-tem",
-            ]
-        )
-        XCTAssertNil(snapshot.settings.selectedJavaVersion)
-        XCTAssertNil(snapshot.settings.selectedJavaHome)
-    }
-
-    func testUninstallJavaWithSDKMANForcesRemovalWhenCurrentVersionAndNoFallbackExists() throws {
-        let targetIdentifier = "11.0.30-tem"
-        let targetHome = "/Users/me/.sdkman/candidates/java/\(targetIdentifier)"
-        let store = InMemoryStore(settings: AppSettings(selectedJavaVersion: "11.0.30", selectedJavaHome: targetHome))
-        let installer = ForceHintSDKMANInstaller(
-            message: """
-            Override with --force, but leaves the candidate unusable!
-            java \(targetIdentifier) is the current version and should not be removed.
-            """
-        )
-        let shell = MockShellRunner(
-            outputsByCommandFragment: [
-                "sdk uninstall java '\(targetIdentifier)' --force": .init(
-                    standardOutput: "removed java \(targetIdentifier).",
-                    standardError: "",
-                    exitCode: 0
-                )
-            ]
-        )
-        let service = NodeEnvironmentService(
-            configStore: store,
-            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
-            javaDetector: MockJavaDetector(
-                installations: [JavaInstallation(version: "11.0.30", homePath: targetHome)],
-                activeVersion: "11.0.30",
-                activeJavaHome: targetHome
-            ),
-            componentInstaller: installer,
-            shellRunner: shell
-        )
-
-        let snapshot = try service.uninstallJavaWithSDKMAN(identifier: targetIdentifier, progress: nil)
-
-        XCTAssertEqual(installer.operations, ["sdkman-uninstall-java:\(targetIdentifier)"])
-        XCTAssertTrue(shell.commands.contains { $0.contains("sdk uninstall java '\(targetIdentifier)' --force") })
-        XCTAssertNil(snapshot.settings.selectedJavaVersion)
-        XCTAssertNil(snapshot.settings.selectedJavaHome)
-    }
-
-    func testUninstallJavaUsesSDKMANPathWhenJavaIsSDKMANManaged() throws {
-        let javaHome = "/Users/me/.sdkman/candidates/java/21.0.4-tem"
-        let store = InMemoryStore(settings: AppSettings(selectedJavaVersion: "21.0.4", selectedJavaHome: javaHome))
-        let installer = MockInstaller(sdkmanInstalled: true)
-        let service = NodeEnvironmentService(
-            configStore: store,
-            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
-            javaDetector: MockJavaDetector(
-                installations: [JavaInstallation(version: "21.0.4", homePath: javaHome)],
+                installations: [JavaInstallation(version: "17.0.16", homePath: javaHome)],
                 activeVersion: nil,
                 activeJavaHome: nil
             ),
@@ -434,106 +332,16 @@ final class NodeEnvironmentServiceTests: XCTestCase {
 
         let snapshot = try service.uninstallJava(homePath: javaHome, progress: nil)
 
-        XCTAssertTrue(installer.operations.contains("sdkman-uninstall-java:21.0.4-tem"))
+        XCTAssertEqual(installer.operations, ["uninstall-java:\(javaHome)"])
         XCTAssertNil(snapshot.settings.selectedJavaVersion)
         XCTAssertNil(snapshot.settings.selectedJavaHome)
-    }
-
-    func testUninstallJavaRemovesNonSDKMANJDKBundleAndClearsSelection() throws {
-        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let jdkBundle = tempRoot.appendingPathComponent("temurin-21.jdk", isDirectory: true)
-        let javaHome = jdkBundle.appendingPathComponent("Contents/Home", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: tempRoot) }
-        try FileManager.default.createDirectory(at: javaHome, withIntermediateDirectories: true)
-
-        let javaHomePath = javaHome.path
-        let store = InMemoryStore(settings: AppSettings(selectedJavaVersion: "21.0.4", selectedJavaHome: javaHomePath))
-        let service = NodeEnvironmentService(
-            configStore: store,
-            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
-            javaDetector: MockJavaDetector(
-                installations: [JavaInstallation(version: "21.0.4", homePath: javaHomePath)],
-                activeVersion: nil,
-                activeJavaHome: nil
-            ),
-            componentInstaller: MockInstaller(),
-            shellRunner: MockShellRunner()
-        )
-
-        let snapshot = try service.uninstallJava(homePath: javaHomePath, progress: nil)
-
-        XCTAssertFalse(FileManager.default.fileExists(atPath: jdkBundle.path))
-        XCTAssertNil(snapshot.settings.selectedJavaVersion)
-        XCTAssertNil(snapshot.settings.selectedJavaHome)
-    }
-
-    func testUninstallJavaFailsForUnsupportedNonSDKMANLocation() {
-        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let javaHomeURL = tempRoot.appendingPathComponent("custom-jdk/Contents/Home", isDirectory: true)
-        try? FileManager.default.createDirectory(at: javaHomeURL, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tempRoot) }
-
-        let javaHome = javaHomeURL.path
-        let store = InMemoryStore(settings: AppSettings(selectedJavaVersion: "1.6.0", selectedJavaHome: javaHome))
-        let service = NodeEnvironmentService(
-            configStore: store,
-            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
-            javaDetector: MockJavaDetector(
-                installations: [JavaInstallation(version: "1.6.0", homePath: javaHome)],
-                activeVersion: nil,
-                activeJavaHome: nil
-            ),
-            componentInstaller: MockInstaller(),
-            shellRunner: MockShellRunner()
-        )
-
-        XCTAssertThrowsError(try service.uninstallJava(homePath: javaHome, progress: nil)) { error in
-            guard case NodeEnvironmentServiceError.javaUninstallUnsupported(let path) = error else {
-                return XCTFail("Unexpected error: \(error)")
-            }
-            XCTAssertEqual(path, javaHome)
-        }
-    }
-
-    func testShouldUsePrivilegedJavaRemovalOnlyForSystemJDKPath() {
-        let service = NodeEnvironmentService(
-            configStore: InMemoryStore(settings: AppSettings()),
-            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
-            javaDetector: MockJavaDetector(),
-            componentInstaller: MockInstaller(),
-            shellRunner: MockShellRunner()
-        )
-
-        XCTAssertTrue(service.shouldUsePrivilegedJavaRemoval(path: "/Library/Java/JavaVirtualMachines/jdk-17.jdk"))
-        XCTAssertFalse(service.shouldUsePrivilegedJavaRemoval(path: "/Users/me/.jdks/jdk-17.jdk"))
-    }
-
-    func testRunPrivilegedJavaUninstallUsesOsaScriptWithAdminPrivileges() throws {
-        let shell = MockShellRunner(
-            outputsByRunCommandFragment: [
-                "/usr/bin/osascript -e": .init(standardOutput: "", standardError: "", exitCode: 0)
-            ]
-        )
-        let service = NodeEnvironmentService(
-            configStore: InMemoryStore(settings: AppSettings()),
-            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
-            javaDetector: MockJavaDetector(),
-            componentInstaller: MockInstaller(),
-            shellRunner: shell
-        )
-
-        try service.runPrivilegedJavaUninstall(path: "/Library/Java/JavaVirtualMachines/jdk-17.jdk")
-
-        XCTAssertTrue(shell.executedLaunchCommands.contains { $0.contains("/usr/bin/osascript -e") })
-        XCTAssertTrue(shell.executedLaunchCommands.contains { $0.contains("with administrator privileges") })
-        XCTAssertTrue(shell.executedLaunchCommands.contains { $0.contains("/bin/rm -rf '/Library/Java/JavaVirtualMachines/jdk-17.jdk'") })
     }
 
     func testSelectDefaultNodeFailsWhenVersionNotInstalled() {
         let store = InMemoryStore(settings: AppSettings())
         let service = NodeEnvironmentService(
             configStore: store,
-            detector: MockDetector(nvmInstalled: true, installations: [], activeVersion: nil, activeNodePath: nil),
+            detector: MockDetector(installations: [], activeVersion: nil, activeNodePath: nil),
             javaDetector: MockJavaDetector(),
             componentInstaller: MockInstaller(),
             shellRunner: MockShellRunner()
@@ -570,180 +378,68 @@ private struct MockJavaDetector: JavaRuntimeDetecting {
 
 private final class MockInstaller: RuntimeComponentInstalling, @unchecked Sendable {
     private(set) var operations: [String] = []
-    private var homebrewInstalled: Bool
-    private var sdkmanInstalled: Bool
-    private let canInstallSDKMANFlag: Bool
-    private let availableJavaCandidates: [SDKMANJavaCandidate]
 
-    init(
-        homebrewInstalled: Bool = true,
-        sdkmanInstalled: Bool = true,
-        canInstallSDKMAN: Bool = true,
-        availableJavaCandidates: [SDKMANJavaCandidate] = []
-    ) {
-        self.homebrewInstalled = homebrewInstalled
-        self.sdkmanInstalled = sdkmanInstalled
-        self.canInstallSDKMANFlag = canInstallSDKMAN
-        self.availableJavaCandidates = availableJavaCandidates
+    func listAvailableNodeVersions(ltsOnly: Bool) throws -> [NodeDownloadCandidate] {
+        [NodeDownloadCandidate(version: "24.15.0", lts: nil)]
     }
 
-    func isHomebrewInstalled() -> Bool {
-        homebrewInstalled
+    func installNode(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeInstallation {
+        operations.append("install-node:\(version)")
+        let normalized = NodeInstallationDetector.normalizeVersion(version) ?? version
+        let installPath = "/Users/me/.envpilot/runtimes/node/\(normalized)"
+        return NodeInstallation(version: normalized, installPath: installPath, executablePath: "\(installPath)/bin/node")
     }
 
-    func installHomebrew() throws {
-        operations.append("install-homebrew")
-        homebrewInstalled = true
+    func uninstallManagedNode(installation: NodeInstallation) throws {
+        operations.append("uninstall-node:\(installation.version)")
     }
 
-    func canInstallNVM() -> Bool {
-        homebrewInstalled
-    }
-
-    func installNVM() throws {
-        operations.append("install-nvm")
-    }
-
-    func isSDKMANInstalled() -> Bool {
-        sdkmanInstalled
-    }
-
-    func canInstallSDKMAN() -> Bool {
-        canInstallSDKMANFlag
-    }
-
-    func installSDKMAN() throws {
-        operations.append("install-sdkman")
-        sdkmanInstalled = true
-    }
-
-    func listAvailableJavaCandidatesWithSDKMAN() throws -> [SDKMANJavaCandidate] {
-        operations.append("sdkman-list-java")
-        return availableJavaCandidates
-    }
-
-    func installJavaWithSDKMAN(identifier: String) throws {
-        operations.append("install-sdkman-java:\(identifier)")
-    }
-
-    func uninstallJavaWithSDKMAN(identifier: String) throws {
-        operations.append("sdkman-uninstall-java:\(identifier)")
-    }
-
-    func setSDKMANDefaultJava(identifier: String) throws {
-        operations.append("sdkman-default-java:\(identifier)")
-    }
-}
-
-private final class RetryingSDKMANInstaller: RuntimeComponentInstalling, @unchecked Sendable {
-    private(set) var operations: [String] = []
-    private let identifierToFailFirst: String
-    private var failedOnce = false
-
-    init(identifierToFailFirst: String) {
-        self.identifierToFailFirst = identifierToFailFirst
-    }
-
-    func isHomebrewInstalled() -> Bool { true }
-    func installHomebrew() throws {}
-    func canInstallNVM() -> Bool { true }
-    func installNVM() throws {}
-    func isSDKMANInstalled() -> Bool { true }
-    func canInstallSDKMAN() -> Bool { true }
-    func installSDKMAN() throws {}
-    func listAvailableJavaCandidatesWithSDKMAN() throws -> [SDKMANJavaCandidate] { [] }
-    func installJavaWithSDKMAN(identifier: String) throws {}
-
-    func uninstallJavaWithSDKMAN(identifier: String) throws {
-        operations.append("sdkman-uninstall-java:\(identifier)")
-        if identifier == identifierToFailFirst, !failedOnce {
-            failedOnce = true
-            throw RuntimeComponentInstallerError.sdkmanJavaUninstallFailed(
-                identifier: identifier,
-                message: "Cannot uninstall: java \(identifier) is currently in use."
+    func listAvailableJavaVersions(ltsOnly: Bool) throws -> [JavaDownloadCandidate] {
+        [
+            JavaDownloadCandidate(
+                featureVersion: 21,
+                version: "21.0.4+7",
+                vendor: "Temurin",
+                packageName: "temurin-21.tar.gz",
+                downloadURL: "https://example.invalid/temurin-21.tar.gz"
             )
-        }
+        ]
     }
 
-    func setSDKMANDefaultJava(identifier: String) throws {
-        operations.append("sdkman-default-java:\(identifier)")
-    }
-}
-
-private final class ForceHintSDKMANInstaller: RuntimeComponentInstalling, @unchecked Sendable {
-    private(set) var operations: [String] = []
-    private let message: String
-
-    init(message: String) {
-        self.message = message
+    func installJava(featureVersion: Int, progress: (@Sendable (String) -> Void)?) throws -> JavaInstallation {
+        operations.append("install-java:\(featureVersion)")
+        let homePath = "/Users/me/.envpilot/runtimes/java/temurin-\(featureVersion).jdk/Contents/Home"
+        return JavaInstallation(version: "\(featureVersion).0.0", homePath: homePath)
     }
 
-    func isHomebrewInstalled() -> Bool { true }
-    func installHomebrew() throws {}
-    func canInstallNVM() -> Bool { true }
-    func installNVM() throws {}
-    func isSDKMANInstalled() -> Bool { true }
-    func canInstallSDKMAN() -> Bool { true }
-    func installSDKMAN() throws {}
-    func listAvailableJavaCandidatesWithSDKMAN() throws -> [SDKMANJavaCandidate] { [] }
-    func installJavaWithSDKMAN(identifier: String) throws {}
-
-    func uninstallJavaWithSDKMAN(identifier: String) throws {
-        operations.append("sdkman-uninstall-java:\(identifier)")
-        throw RuntimeComponentInstallerError.sdkmanJavaUninstallFailed(
-            identifier: identifier,
-            message: message
-        )
-    }
-
-    func setSDKMANDefaultJava(identifier: String) throws {
-        operations.append("sdkman-default-java:\(identifier)")
+    func uninstallManagedJava(homePath: String) throws {
+        operations.append("uninstall-java:\(homePath)")
     }
 }
 
 private struct FailingInstaller: RuntimeComponentInstalling {
-    func isHomebrewInstalled() -> Bool {
-        false
+    func listAvailableNodeVersions(ltsOnly: Bool) throws -> [NodeDownloadCandidate] {
+        throw RuntimeComponentInstallerError.runtimeDownloadFailed(url: "node", message: "download failed")
     }
 
-    func installHomebrew() throws {
-        throw RuntimeComponentInstallerError.homebrewInstallFailed(message: "brew failed")
+    func installNode(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeInstallation {
+        throw RuntimeComponentInstallerError.runtimeDownloadFailed(url: "node", message: "download failed")
     }
 
-    func canInstallNVM() -> Bool {
-        false
+    func uninstallManagedNode(installation: NodeInstallation) throws {
+        throw RuntimeComponentInstallerError.runtimeNotInstalled(path: installation.installPath)
     }
 
-    func installNVM() throws {
-        throw RuntimeComponentInstallerError.nvmInstallFailed(message: "nvm failed")
+    func listAvailableJavaVersions(ltsOnly: Bool) throws -> [JavaDownloadCandidate] {
+        throw RuntimeComponentInstallerError.runtimeDownloadFailed(url: "java", message: "download failed")
     }
 
-    func isSDKMANInstalled() -> Bool {
-        false
+    func installJava(featureVersion: Int, progress: (@Sendable (String) -> Void)?) throws -> JavaInstallation {
+        throw RuntimeComponentInstallerError.runtimeDownloadFailed(url: "java", message: "download failed")
     }
 
-    func canInstallSDKMAN() -> Bool {
-        false
-    }
-
-    func installSDKMAN() throws {
-        throw RuntimeComponentInstallerError.sdkmanInstallFailed(message: "sdkman failed")
-    }
-
-    func listAvailableJavaCandidatesWithSDKMAN() throws -> [SDKMANJavaCandidate] {
-        throw RuntimeComponentInstallerError.sdkmanListJavaFailed(message: "list failed")
-    }
-
-    func installJavaWithSDKMAN(identifier: String) throws {
-        throw RuntimeComponentInstallerError.sdkmanJavaInstallFailed(identifier: identifier, message: "java install failed")
-    }
-
-    func uninstallJavaWithSDKMAN(identifier: String) throws {
-        throw RuntimeComponentInstallerError.sdkmanJavaUninstallFailed(identifier: identifier, message: "java uninstall failed")
-    }
-
-    func setSDKMANDefaultJava(identifier: String) throws {
-        throw RuntimeComponentInstallerError.sdkmanSetDefaultFailed(identifier: identifier, message: "default failed")
+    func uninstallManagedJava(homePath: String) throws {
+        throw RuntimeComponentInstallerError.runtimeNotInstalled(path: homePath)
     }
 }
 
@@ -801,14 +497,9 @@ private final class MockShellRunner: ShellCommandRunning, @unchecked Sendable {
 }
 
 private struct MockDetector: NodeInstallationDetecting {
-    let nvmInstalled: Bool
     let installations: [NodeInstallation]
     let activeVersion: String?
     let activeNodePath: String?
-
-    func isNVMInstalled() -> Bool {
-        nvmInstalled
-    }
 
     func detectInstallations() -> [NodeInstallation] {
         installations

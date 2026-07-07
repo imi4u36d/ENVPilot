@@ -37,6 +37,7 @@ private struct VersionLocation: Codable {
 private struct CLIStatusOutput: Codable {
     let cwd: String
     let selected_version: String
+    let selected_node_path: String
     let effective_version: String
     let effective_version_source: String
     let project_version_preference: String
@@ -45,9 +46,6 @@ private struct CLIStatusOutput: Codable {
     let selected_java_version: String
     let selected_java_home: String
     let profiles_count: Int
-    let sdkman_installed: Bool
-    let sdkman_can_install: Bool
-    let sdkman_has_managed_jdks: Bool
     let detected_node_versions: [VersionLocation]
     let detected_jdk_versions: [VersionLocation]
     let active_node_version: String
@@ -117,26 +115,17 @@ struct ENVPilotCLI {
     private let configStore: ConfigStore
     private let shellIntegration: ShellIntegrationService
     private let projectVersionResolver: ProjectNodeVersionResolver
-    private let nodeDetector: NodeInstallationDetector
-    private let runtimeInstaller: RuntimeComponentInstaller
-    private let javaDetector: JavaRuntimeDetector
     private let runtimeService: NodeEnvironmentService
 
     init(
         configStore: ConfigStore = ConfigStore(),
         shellIntegration: ShellIntegrationService = ShellIntegrationService(),
         projectVersionResolver: ProjectNodeVersionResolver = ProjectNodeVersionResolver(),
-        nodeDetector: NodeInstallationDetector = NodeInstallationDetector(),
-        runtimeInstaller: RuntimeComponentInstaller = RuntimeComponentInstaller(),
-        javaDetector: JavaRuntimeDetector = JavaRuntimeDetector(),
         runtimeService: NodeEnvironmentService = NodeEnvironmentService()
     ) {
         self.configStore = configStore
         self.shellIntegration = shellIntegration
         self.projectVersionResolver = projectVersionResolver
-        self.nodeDetector = nodeDetector
-        self.runtimeInstaller = runtimeInstaller
-        self.javaDetector = javaDetector
         self.runtimeService = runtimeService
     }
 
@@ -156,10 +145,12 @@ struct ENVPilotCLI {
                 try runDoctor(arguments: commandArguments)
             case "set-version":
                 try runSetVersion(arguments: commandArguments)
-            case "install-sdkman":
-                try runInstallSDKMAN()
-            case "sdk-install-jdk":
-                try runSDKInstallJDK(arguments: commandArguments)
+            case "available":
+                try runAvailable(arguments: commandArguments)
+            case "install-node":
+                try runInstallNode(arguments: commandArguments)
+            case "install-jdk":
+                try runInstallJDK(arguments: commandArguments)
             case "set-profile":
                 try runSetProfile(arguments: commandArguments)
             case "profile":
@@ -168,6 +159,10 @@ struct ENVPilotCLI {
                 try runSetJDK(arguments: commandArguments)
             case "config":
                 try runConfig(arguments: commandArguments)
+            case "use":
+                try runUse(arguments: commandArguments)
+            case "list":
+                try runList(arguments: commandArguments)
             case "activate":
                 try runActivate(arguments: commandArguments)
             case "install-snippet":
@@ -211,6 +206,7 @@ struct ENVPilotCLI {
         let output = CLIStatusOutput(
             cwd: cwdPath,
             selected_version: settings.selectedVersion ?? "",
+            selected_node_path: settings.selectedNodePath ?? "",
             effective_version: effectiveVersion ?? "",
             effective_version_source: effectiveVersionSource.rawValue,
             project_version_preference: settings.projectVersionPreference.rawValue,
@@ -219,9 +215,6 @@ struct ENVPilotCLI {
             selected_java_version: settings.selectedJavaVersion ?? "",
             selected_java_home: settings.selectedJavaHome ?? "",
             profiles_count: settings.profiles.count,
-            sdkman_installed: snapshot.sdkmanStatus.isInstalled,
-            sdkman_can_install: snapshot.sdkmanStatus.canInstall,
-            sdkman_has_managed_jdks: snapshot.sdkmanStatus.hasManagedJavaInstallations,
             detected_node_versions: snapshot.installations.map { .init(version: $0.version, path: $0.installPath) },
             detected_jdk_versions: snapshot.javaInstallations.map { .init(version: $0.version, path: $0.homePath) },
             active_node_version: snapshot.activeVersion ?? "",
@@ -243,6 +236,7 @@ struct ENVPilotCLI {
         case .text:
             print("cwd=\(output.cwd)")
             print("selected_version=\(output.selected_version)")
+            print("selected_node_path=\(output.selected_node_path)")
             print("effective_version=\(output.effective_version)")
             print("effective_version_source=\(output.effective_version_source)")
             print("project_version_preference=\(output.project_version_preference)")
@@ -251,9 +245,6 @@ struct ENVPilotCLI {
             print("selected_java_version=\(output.selected_java_version)")
             print("selected_java_home=\(output.selected_java_home)")
             print("profiles_count=\(output.profiles_count)")
-            print("sdkman_installed=\(output.sdkman_installed)")
-            print("sdkman_can_install=\(output.sdkman_can_install)")
-            print("sdkman_has_managed_jdks=\(output.sdkman_has_managed_jdks)")
             print("detected_node_versions=\(output.detected_node_versions.map { "\($0.version):\($0.path)" }.joined(separator: ","))")
             print("detected_jdk_versions=\(output.detected_jdk_versions.map { "\($0.version):\($0.path)" }.joined(separator: ","))")
             print("active_node_version=\(output.active_node_version)")
@@ -344,34 +335,76 @@ struct ENVPilotCLI {
         }
 
         _ = try runtimeService.selectDefaultNode(version: version)
-        print("switched default node to \(version) via nvm")
+        print("switched default node to \(version) via ENVPilot")
     }
 
-    private func runInstallSDKMAN() throws {
-        _ = try runtimeService.installSDKMAN(progress: nil)
-        print("sdkman installed or already available")
-    }
-
-    private func runSDKInstallJDK(arguments: [String]) throws {
-        try validateOptions(
-            in: arguments,
-            allowedOptions: ["--dry-run"]
-        )
-        let positionals = positionalArguments(from: arguments)
-        guard let identifier = positionals.first else {
+    private func runAvailable(arguments: [String]) throws {
+        try validateOptions(in: arguments, allowedOptions: ["--format", "--lts"])
+        let format = try parseOutputFormat(from: arguments)
+        let ltsOnly = parseFlagOption(name: "--lts", in: arguments)
+        let positionals = positionalArguments(from: arguments, flagOptions: ["--lts"])
+        guard positionals.count == 1 else {
             throw CLIError(
-                description: "sdk-install-jdk requires <identifier>",
+                description: "available requires <n|node|j|java|jdk>",
                 exitCode: .usageError
             )
         }
 
+        switch positionals[0].lowercased() {
+        case "n", "node":
+            let candidates = try runtimeService.listAvailableNodeVersions(ltsOnly: ltsOnly)
+            switch format {
+            case .text:
+                for candidate in candidates {
+                    print("\(candidate.version)\t\(candidate.lts ?? "Current")")
+                }
+            case .json:
+                try printJSON(candidates)
+            }
+        case "j", "java", "jdk":
+            let candidates = try runtimeService.listAvailableJavaVersions(ltsOnly: ltsOnly)
+            switch format {
+            case .text:
+                for candidate in candidates {
+                    print("\(candidate.featureVersion)\t\(candidate.version)\t\(candidate.vendor)")
+                }
+            case .json:
+                try printJSON(candidates)
+            }
+        default:
+            throw CLIError(
+                description: "Unsupported runtime: \(positionals[0]). Allowed: n|node|j|java|jdk",
+                exitCode: .usageError
+            )
+        }
+    }
+
+    private func runInstallNode(arguments: [String]) throws {
+        try validateOptions(in: arguments, allowedOptions: ["--dry-run"])
+        let positionals = positionalArguments(from: arguments)
+        guard let version = positionals.first else {
+            throw CLIError(description: "install-node requires <version>", exitCode: .usageError)
+        }
         if parseFlagOption(name: "--dry-run", in: arguments) {
-            print("dry-run: would install jdk via sdkman: \(identifier)")
+            print("dry-run: would install Node \(version) through ENVPilot")
             return
         }
-        let snapshot = try runtimeService.installJavaWithSDKMAN(identifier: identifier, progress: nil)
-        let activeJava = snapshot.activeJavaVersion ?? snapshot.settings.selectedJavaVersion ?? identifier
-        print("installed jdk via sdkman: \(identifier), active java: \(activeJava)")
+        let snapshot = try runtimeService.installNode(version: version, progress: cliProgressPrinter())
+        print("installed node \(snapshot.settings.selectedVersion ?? version)")
+    }
+
+    private func runInstallJDK(arguments: [String]) throws {
+        try validateOptions(in: arguments, allowedOptions: ["--dry-run"])
+        let positionals = positionalArguments(from: arguments)
+        guard let rawFeatureVersion = positionals.first, let featureVersion = Int(rawFeatureVersion) else {
+            throw CLIError(description: "install-jdk requires <feature-version>, for example 21", exitCode: .usageError)
+        }
+        if parseFlagOption(name: "--dry-run", in: arguments) {
+            print("dry-run: would install Temurin JDK \(featureVersion) through ENVPilot")
+            return
+        }
+        let snapshot = try runtimeService.installJava(featureVersion: featureVersion, progress: cliProgressPrinter())
+        print("installed jdk \(snapshot.settings.selectedJavaVersion ?? rawFeatureVersion)")
     }
 
     private func runSetProfile(arguments: [String]) throws {
@@ -438,7 +471,7 @@ struct ENVPilotCLI {
 
         let dryRun = parseFlagOption(name: "--dry-run", in: arguments)
         var settings = try configStore.load()
-        let installations = javaDetector.detectInstallations()
+        let installations = try runtimeService.loadSnapshot().javaInstallations
 
         let matched: JavaInstallation?
         if javaRef.contains("/") {
@@ -961,6 +994,8 @@ struct ENVPilotCLI {
             print(settings.projectVersionPreference.rawValue)
         case "selected-version":
             print(settings.selectedVersion ?? "")
+        case "selected-node-path":
+            print(settings.selectedNodePath ?? "")
         case "selected-java-version":
             print(settings.selectedJavaVersion ?? "")
         case "selected-java-home":
@@ -992,7 +1027,21 @@ struct ENVPilotCLI {
             print("updated project-version-preference to \(preference.rawValue)")
         case "selected-version":
             var settings = try configStore.load()
-            settings.selectedVersion = value == "none" ? nil : value
+            if value == "none" {
+                settings.selectedVersion = nil
+                settings.selectedNodePath = nil
+            } else {
+                let normalizedVersion = NodeInstallationDetector.normalizeVersion(value) ?? value
+                let snapshot = try runtimeService.loadSnapshot()
+                guard let installation = snapshot.installations.first(where: { $0.version == normalizedVersion }) else {
+                    throw CLIError(
+                        description: "Node version is not detected locally: \(value)",
+                        exitCode: .runtimeFailure
+                    )
+                }
+                settings.selectedVersion = installation.version
+                settings.selectedNodePath = installation.installPath
+            }
             try configStore.save(settings)
             print("updated selected-version")
         case "selected-profile":
@@ -1025,6 +1074,75 @@ struct ENVPilotCLI {
         }
     }
 
+    private func runUse(arguments: [String]) throws {
+        try validateOptions(in: arguments, allowedOptions: ["--cwd"])
+        let positionals = positionalArguments(from: arguments, optionsWithValue: ["--cwd"])
+        guard positionals.count == 2 else {
+            throw CLIError(
+                description: "use requires <n|node|j|java|jdk> <version>",
+                exitCode: .usageError
+            )
+        }
+
+        let runtime = positionals[0].lowercased()
+        let requestedVersion = positionals[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !requestedVersion.isEmpty else {
+            throw CLIError(description: "runtime version cannot be empty", exitCode: .usageError)
+        }
+
+        let cwd = try parseCWD(from: arguments) ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        let settings = try runtimeService.loadSnapshot().settings
+
+        switch runtime {
+        case "n", "node":
+            let version = try resolveCachedNodeVersionOrThrow(requestedVersion, settings: settings)
+            try writeProjectRuntimeValue(key: "NODE_VERSION", value: version, directory: cwd)
+            print("updated .envpilot: NODE_VERSION=\(version)")
+        case "j", "java", "jdk":
+            let version = try resolveCachedJavaVersionOrThrow(requestedVersion, settings: settings)
+            try writeProjectRuntimeValue(key: "JAVA_VERSION", value: version, directory: cwd)
+            print("updated .envpilot: JAVA_VERSION=\(version)")
+        default:
+            throw CLIError(
+                description: "Unsupported runtime: \(positionals[0]). Allowed: n|node|j|java|jdk",
+                exitCode: .usageError
+            )
+        }
+    }
+
+    private func runList(arguments: [String]) throws {
+        try validateOptions(in: arguments, allowedOptions: ["--format"])
+        let format = try parseOutputFormat(from: arguments)
+        let positionals = positionalArguments(from: arguments)
+        guard positionals.count <= 1 else {
+            throw CLIError(
+                description: "list requires no arguments or <n|node|j|java|jdk>",
+                exitCode: .usageError
+            )
+        }
+
+        let runtime = positionals.first?.lowercased()
+        let snapshot = try runtimeService.loadSnapshot()
+
+        switch runtime {
+        case nil:
+            try printRuntimeList(
+                nodeInstallations: snapshot.installations,
+                javaInstallations: snapshot.javaInstallations,
+                format: format
+            )
+        case "n", "node":
+            try printNodeList(snapshot.installations, format: format)
+        case "j", "java", "jdk":
+            try printJavaList(snapshot.javaInstallations, format: format)
+        default:
+            throw CLIError(
+                description: "Unsupported runtime: \(positionals[0]). Allowed: n|node|j|java|jdk",
+                exitCode: .usageError
+            )
+        }
+    }
+
     private func runActivate(arguments: [String]) throws {
         try validateOptions(
             in: arguments,
@@ -1034,7 +1152,11 @@ struct ENVPilotCLI {
         let settings = try configStore.load()
         let cwd = try parseCWD(from: arguments)
         let cwdPath = cwd?.path ?? FileManager.default.currentDirectoryPath
-        let script = shellIntegration.renderActivationScript(settings: settings, cwd: cwd, shell: .zsh)
+        let script = shellIntegration.renderActivationScript(
+            settings: settings,
+            cwd: cwd,
+            shell: .zsh
+        )
         switch format {
         case .text:
             print(script)
@@ -1213,43 +1335,16 @@ struct ENVPilotCLI {
 
     private func buildDoctorChecks() -> [CLIDoctorCheck] {
         var checks: [CLIDoctorCheck] = []
+        let snapshot = try? runtimeService.loadSnapshot()
         checks.append(
             .init(
-                id: "homebrew_installed",
-                ok: runtimeInstaller.isHomebrewInstalled(),
-                required: false,
-                message: "Homebrew 可用于自动安装 NVM",
-                fix_hint: "可执行: brew --version；若未安装，运行官方 Homebrew 安装脚本"
-            )
-        )
-        checks.append(
-            .init(
-                id: "nvm_installed",
-                ok: nodeDetector.isNVMInstalled(),
+                id: "node_detected",
+                ok: !(snapshot?.installations.isEmpty ?? true),
                 required: true,
-                message: "NVM 是 Node 版本管理的必需依赖",
-                fix_hint: "先确保 Homebrew 可用，再执行 envpilot-helper status 触发自动安装，或手动安装 nvm"
+                message: "已检测到 ENVPilot 管理的 Node",
+                fix_hint: "可执行 available node 查看候选，再用 install-node 安装"
             )
         )
-        checks.append(
-            .init(
-                id: "sdkman_installed",
-                ok: runtimeInstaller.isSDKMANInstalled(),
-                required: false,
-                message: "SDKMAN 用于 JDK 管理（可选）",
-                fix_hint: "可执行 envpilot-helper install-sdkman 进行安装"
-            )
-        )
-        checks.append(
-            .init(
-                id: "sdkman_can_install",
-                ok: runtimeInstaller.canInstallSDKMAN(),
-                required: false,
-                message: "当前环境是否具备安装 SDKMAN 的条件",
-                fix_hint: "确保 curl 可用，且系统有现代 bash（>=4）或可通过 brew 安装"
-            )
-        )
-
         do {
             _ = try configStore.settingsURL()
             checks.append(
@@ -1390,7 +1485,7 @@ struct ENVPilotCLI {
     }
 
     private func resolveJavaInstallationOrThrow(reference: String) throws -> JavaInstallation {
-        let installations = javaDetector.detectInstallations()
+        let installations = try runtimeService.loadSnapshot().javaInstallations
         let resolved: JavaInstallation?
         if reference.contains("/") {
             resolved = installations.first(where: { $0.homePath == reference })
@@ -1404,6 +1499,168 @@ struct ENVPilotCLI {
             )
         }
         return resolved
+    }
+
+    private func resolveCachedNodeVersionOrThrow(_ reference: String, settings: AppSettings) throws -> String {
+        let installations = settings.cachedNodeInstallations ?? []
+        guard !installations.isEmpty else {
+            throw CLIError(
+                description: "No cached Node runtimes. Open ENVPilot and refresh runtimes, or run envpilot-helper status first.",
+                exitCode: .runtimeFailure
+            )
+        }
+
+        if let version = cachedNodeVersionMatching(reference, settings: settings) {
+            return version
+        }
+
+        throw CLIError(
+            description: "Cannot find cached Node matching: \(reference). Refresh runtimes in ENVPilot first.",
+            exitCode: .runtimeFailure
+        )
+    }
+
+    private func cachedNodeVersionMatching(_ reference: String, settings: AppSettings) -> String? {
+        let installations = settings.cachedNodeInstallations ?? []
+        let normalizedReference = NodeInstallationDetector.normalizeVersion(reference) ?? reference
+        if let exactMatch = installations.first(where: { $0.version == normalizedReference }) {
+            return exactMatch.version
+        }
+        if let majorMatch = installations.first(where: { $0.version.hasPrefix("\(normalizedReference).") }) {
+            return majorMatch.version
+        }
+        return nil
+    }
+
+    private func resolveCachedJavaVersionOrThrow(_ reference: String, settings: AppSettings) throws -> String {
+        let installations = settings.cachedJavaInstallations ?? []
+        guard !installations.isEmpty else {
+            throw CLIError(
+                description: "No cached JDK runtimes. Open ENVPilot and refresh runtimes, or run envpilot-helper status first.",
+                exitCode: .runtimeFailure
+            )
+        }
+
+        if let version = cachedJavaVersionMatching(reference, settings: settings) {
+            return version
+        }
+
+        throw CLIError(
+            description: "Cannot find cached JDK matching: \(reference). Refresh runtimes in ENVPilot first.",
+            exitCode: .runtimeFailure
+        )
+    }
+
+    private func cachedJavaVersionMatching(_ reference: String, settings: AppSettings) -> String? {
+        let installations = settings.cachedJavaInstallations ?? []
+        if installations.contains(where: { $0.version == reference }) {
+            return reference
+        }
+        if installations.contains(where: { $0.version == reference || $0.version.hasPrefix("\(reference).") }) {
+            return reference
+        }
+        return nil
+    }
+
+    private func writeProjectRuntimeValue(key: String, value: String, directory: URL) throws {
+        if value.contains(where: \.isNewline) {
+            throw CLIError(description: "\(key) cannot contain newlines", exitCode: .usageError)
+        }
+
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw CLIError(description: "Project directory does not exist: \(directory.path)", exitCode: .usageError)
+        }
+
+        let fileURL = directory.appendingPathComponent(".envpilot")
+        let existingContents: String
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            existingContents = try String(contentsOf: fileURL, encoding: .utf8)
+        } else {
+            existingContents = ""
+        }
+
+        var found = false
+        var lines = existingContents.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        lines = lines.map { line in
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.hasPrefix("#"),
+                  let separatorIndex = trimmed.firstIndex(of: "="),
+                  trimmed[..<separatorIndex].trimmingCharacters(in: .whitespacesAndNewlines) == key
+            else {
+                return line
+            }
+            found = true
+            return "\(key)=\(value)"
+        }
+
+        if !found {
+            if !lines.isEmpty, lines.last == "" {
+                lines.insert("\(key)=\(value)", at: lines.count - 1)
+            } else {
+                lines.append("\(key)=\(value)")
+            }
+        }
+
+        let updatedContents = lines.joined(separator: "\n")
+        try updatedContents.write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+
+    private func printRuntimeList(
+        nodeInstallations: [NodeInstallation],
+        javaInstallations: [JavaInstallation],
+        format: CLIOutputFormat
+    ) throws {
+        switch format {
+        case .text:
+            print("node:")
+            printVersionLocations(nodeInstallations.map { VersionLocation(version: $0.version, path: $0.installPath) })
+            print("java:")
+            printVersionLocations(javaInstallations.map { VersionLocation(version: $0.version, path: $0.homePath) })
+        case .json:
+            try printJSON([
+                "node": nodeInstallations.map { VersionLocation(version: $0.version, path: $0.installPath) },
+                "java": javaInstallations.map { VersionLocation(version: $0.version, path: $0.homePath) },
+            ])
+        }
+    }
+
+    private func printNodeList(_ installations: [NodeInstallation], format: CLIOutputFormat) throws {
+        let locations = installations.map { VersionLocation(version: $0.version, path: $0.installPath) }
+        switch format {
+        case .text:
+            printVersionLocations(locations)
+        case .json:
+            try printJSON(locations)
+        }
+    }
+
+    private func printJavaList(_ installations: [JavaInstallation], format: CLIOutputFormat) throws {
+        let locations = installations.map { VersionLocation(version: $0.version, path: $0.homePath) }
+        switch format {
+        case .text:
+            printVersionLocations(locations)
+        case .json:
+            try printJSON(locations)
+        }
+    }
+
+    private func printVersionLocations(_ locations: [VersionLocation]) {
+        if locations.isEmpty {
+            print("  no cached runtimes; refresh in ENVPilot or run ep status")
+            return
+        }
+
+        for location in locations {
+            print("  \(location.version)\t\(location.path)")
+        }
+    }
+
+    private func cliProgressPrinter() -> @Sendable (String) -> Void {
+        { message in
+            print(message)
+            fflush(stdout)
+        }
     }
 
     private func normalizeVariableKey(_ key: String) throws -> String {
@@ -1568,8 +1825,9 @@ struct ENVPilotCLI {
           status [--cwd <path>] [--format text|json] [--fields <k1,k2>] [--include-profile]
           doctor [--format text|json] [--check <id>]
           set-version <version> [--dry-run]
-          install-sdkman
-          sdk-install-jdk <identifier> [--dry-run]
+          available <n|node|j|java|jdk> [--format text|json] [--lts]
+          install-node <version> [--dry-run]
+          install-jdk <feature-version> [--dry-run]
           set-profile <profile-name-or-id> [--dry-run]
           profile list [--format text|json]
           profile get <profile-id|name> [--format text|json]
@@ -1582,6 +1840,11 @@ struct ENVPilotCLI {
           profile var unset <profile-id|name> <KEY> [--dry-run]
           profile var list <profile-id|name> [--format text|json]
           set-jdk <version-or-home-path> [--dry-run]
+          list [n|node|j|java] [--format text|json]
+          use n <version> [--cwd <path>]
+          use j <version> [--cwd <path>]
+          use node <version> [--cwd <path>]
+          use java <version> [--cwd <path>]
           config get <project-version-preference|selected-version|selected-java-version|selected-java-home|selected-profile-id|selected-profile-name>
           config set project-version-preference <globalDefault|followProjectFiles>
           config set selected-version <version|none>

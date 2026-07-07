@@ -1,7 +1,6 @@
 import Foundation
 
 public protocol NodeInstallationDetecting: Sendable {
-    func isNVMInstalled() -> Bool
     func detectInstallations() -> [NodeInstallation]
     func detectActiveVersion() -> String?
     func detectActiveNodePath() -> String?
@@ -14,43 +13,39 @@ public struct NodeInstallationDetector: NodeInstallationDetecting, Sendable {
         self.shellRunner = shellRunner
     }
 
-    public func isNVMInstalled() -> Bool {
-        nvmScriptPath() != nil
-    }
-
     public func detectInstallations() -> [NodeInstallation] {
-        guard let nvmDirectory = resolvedNVMDirectory() else {
-            return []
-        }
         let fileManager = FileManager.default
-
         let defaultVersion = detectDefaultVersion()
-        let versionsRoot = nvmDirectory.appendingPathComponent("versions/node", isDirectory: true)
-        guard let entries = try? fileManager.contentsOfDirectory(
-            at: versionsRoot,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        ) else {
-            return []
+        var executablePaths = Set<String>()
+
+        if let nvmDirectory = resolvedNVMDirectory() {
+            let versionsRoot = nvmDirectory.appendingPathComponent("versions/node", isDirectory: true)
+            if let entries = try? fileManager.contentsOfDirectory(
+                at: versionsRoot,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) {
+                for versionDirectory in entries {
+                    executablePaths.insert(versionDirectory.appendingPathComponent("bin/node").path)
+                }
+            }
         }
 
-        let installations = entries.compactMap { versionDirectory -> NodeInstallation? in
-            let executablePath = versionDirectory.appendingPathComponent("bin/node").path
-            guard fileManager.isExecutableFile(atPath: executablePath) else {
-                return nil
+        executablePaths.formUnion(directNodeExecutableCandidates(fileManager: fileManager))
+
+        var installationsByExecutablePath: [String: NodeInstallation] = [:]
+        for executablePath in executablePaths {
+            guard let installation = installationFromNodeExecutable(
+                executablePath,
+                defaultVersion: defaultVersion,
+                fileManager: fileManager
+            ) else {
+                continue
             }
-            guard let version = versionFromNodeBinary(executablePath) else {
-                return nil
-            }
-            return NodeInstallation(
-                version: version,
-                installPath: versionDirectory.path,
-                executablePath: executablePath,
-                isDefault: version == defaultVersion
-            )
+            installationsByExecutablePath[installation.executablePath] = installation
         }
 
-        return installations.sorted(by: sortInstallation(_:_:))
+        return installationsByExecutablePath.values.sorted(by: sortInstallation(_:_:))
     }
 
     public func detectActiveVersion() -> String? {
@@ -64,10 +59,7 @@ public struct NodeInstallationDetector: NodeInstallationDetecting, Sendable {
     }
 
     public func detectDefaultVersion() -> String? {
-        guard isNVMInstalled() else {
-            return nil
-        }
-        return Self.normalizeVersion(runShellOutput(Self.nvmBootstrap("nvm alias default")))
+        nil
     }
 
     func resolvedNVMDirectory() -> URL? {
@@ -78,27 +70,9 @@ public struct NodeInstallationDetector: NodeInstallationDetecting, Sendable {
         return fileManager.fileExists(atPath: url.path) ? url : nil
     }
 
-    func nvmScriptPath() -> String? {
-        let fileManager = FileManager.default
-        for candidate in candidateNVMScriptPaths() where fileManager.isReadableFile(atPath: candidate) {
-            return candidate
-        }
-        return nil
-    }
-
-    func candidateNVMScriptPaths() -> [String] {
-        let nvmDirectory = ((ProcessInfo.processInfo.environment["NVM_DIR"] ?? "~/.nvm") as NSString)
-            .expandingTildeInPath
-
-        return [
-            "\(nvmDirectory)/nvm.sh",
-            "/opt/homebrew/opt/nvm/nvm.sh",
-            "/usr/local/opt/nvm/nvm.sh",
-        ]
-    }
-
     func runShellOutput(_ command: String) -> String {
         let wrappedCommand = """
+        export ENVPILOT_ACTIVATING=1
         if [ -f "$HOME/.zshrc" ]; then
           . "$HOME/.zshrc" >/dev/null 2>&1 || true
         fi
@@ -119,32 +93,106 @@ public struct NodeInstallationDetector: NodeInstallationDetecting, Sendable {
         return Self.normalizeVersion(output)
     }
 
+    func directNodeExecutableCandidates(fileManager: FileManager) -> Set<String> {
+        var candidates = Set<String>()
+        if let activeNodePath = detectActiveNodePath() {
+            candidates.insert(activeNodePath)
+        }
+
+        for prefix in ["/opt/homebrew", "/usr/local", "/usr"] {
+            candidates.insert("\(prefix)/bin/node")
+        }
+
+        for optRoot in ["/opt/homebrew/opt", "/usr/local/opt"] {
+            candidates.formUnion(nodeExecutablesInOptRoot(optRoot, fileManager: fileManager))
+        }
+
+        for cellarRoot in ["/opt/homebrew/Cellar", "/usr/local/Cellar"] {
+            candidates.formUnion(nodeExecutablesInCellarRoot(cellarRoot, fileManager: fileManager))
+        }
+
+        for userRoot in [
+            "~/.envpilot/runtimes/node",
+            "~/.envpilot/node",
+            "~/.local/share/envpilot/node",
+            "~/.local/node",
+        ] {
+            candidates.formUnion(nodeExecutablesInVersionedRoot(userRoot, fileManager: fileManager))
+        }
+
+        return candidates
+    }
+
+    func nodeExecutablesInOptRoot(_ root: String, fileManager: FileManager) -> Set<String> {
+        guard let entries = try? fileManager.contentsOfDirectory(atPath: root) else {
+            return []
+        }
+        return Set(entries.filter { $0 == "node" || $0.hasPrefix("node@") }.map { "\(root)/\($0)/bin/node" })
+    }
+
+    func nodeExecutablesInCellarRoot(_ root: String, fileManager: FileManager) -> Set<String> {
+        var candidates = Set<String>()
+        guard let formulaDirs = try? fileManager.contentsOfDirectory(atPath: root) else {
+            return candidates
+        }
+
+        for formula in formulaDirs where formula == "node" || formula.hasPrefix("node@") {
+            let formulaPath = "\(root)/\(formula)"
+            guard let versions = try? fileManager.contentsOfDirectory(atPath: formulaPath) else {
+                continue
+            }
+            for version in versions {
+                candidates.insert("\(formulaPath)/\(version)/bin/node")
+            }
+        }
+        return candidates
+    }
+
+    func nodeExecutablesInVersionedRoot(_ root: String, fileManager: FileManager) -> Set<String> {
+        let expandedRoot = (root as NSString).expandingTildeInPath
+        var candidates: Set<String> = ["\(expandedRoot)/bin/node"]
+        guard let entries = try? fileManager.contentsOfDirectory(atPath: expandedRoot) else {
+            return candidates
+        }
+        for entry in entries where !entry.hasPrefix(".") {
+            candidates.insert("\(expandedRoot)/\(entry)/bin/node")
+        }
+        return candidates
+    }
+
+    func installationFromNodeExecutable(
+        _ executablePath: String,
+        defaultVersion: String?,
+        fileManager: FileManager
+    ) -> NodeInstallation? {
+        let standardizedExecutablePath = URL(fileURLWithPath: executablePath)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
+        guard fileManager.isExecutableFile(atPath: standardizedExecutablePath) else {
+            return nil
+        }
+        guard let version = versionFromNodeBinary(standardizedExecutablePath) else {
+            return nil
+        }
+        let installPath = URL(fileURLWithPath: standardizedExecutablePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .standardizedFileURL
+            .path
+        return NodeInstallation(
+            version: version,
+            installPath: installPath,
+            executablePath: standardizedExecutablePath,
+            isDefault: version == defaultVersion
+        )
+    }
+
     func sortInstallation(_ lhs: NodeInstallation, _ rhs: NodeInstallation) -> Bool {
         if lhs.version == rhs.version {
             return lhs.installPath < rhs.installPath
         }
         return Self.isVersionGreater(lhs.version, rhs.version)
-    }
-
-    public static func nvmBootstrap(_ command: String) -> String {
-        """
-        if [ -f "$HOME/.zprofile" ]; then
-          . "$HOME/.zprofile" >/dev/null 2>&1 || true;
-        fi;
-        if [ -f "$HOME/.zshrc" ]; then
-          . "$HOME/.zshrc" >/dev/null 2>&1 || true;
-        fi;
-        export NVM_DIR="${NVM_DIR:-$HOME/.nvm}";
-        mkdir -p "$NVM_DIR";
-        if [ -s "$NVM_DIR/nvm.sh" ]; then
-          . "$NVM_DIR/nvm.sh";
-        elif [ -s "/opt/homebrew/opt/nvm/nvm.sh" ]; then
-          . "/opt/homebrew/opt/nvm/nvm.sh";
-        elif [ -s "/usr/local/opt/nvm/nvm.sh" ]; then
-          . "/usr/local/opt/nvm/nvm.sh";
-        fi;
-        \(command)
-        """
     }
 
     public static func normalizeVersion(_ raw: String?) -> String? {

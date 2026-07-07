@@ -4,9 +4,12 @@ import ENVPilotCore
 @MainActor
 final class NodeRuntimeStore: ObservableObject {
     @Published private(set) var snapshot: NodeRuntimeSnapshot?
-    @Published private(set) var sdkmanJavaCandidates: [SDKMANJavaCandidate] = []
+    @Published private(set) var nodeDownloadCandidates: [NodeDownloadCandidate] = []
+    @Published private(set) var javaDownloadCandidates: [JavaDownloadCandidate] = []
     @Published private(set) var isLoading = false
     @Published private(set) var loadingMessage: String?
+    @Published private(set) var installingCandidateID: String?
+    @Published private(set) var installingCandidateMessage: String?
     @Published var latestError: String?
 
     private let service: any NodeRuntimeServicing
@@ -21,7 +24,13 @@ final class NodeRuntimeStore: ObservableObject {
     }
 
     var configuredNodeInstallation: NodeInstallation? {
-        guard let selectedVersion = snapshot?.settings.selectedVersion else {
+        guard let settings = snapshot?.settings else {
+            return nil
+        }
+        if let selectedNodePath = settings.selectedNodePath {
+            return snapshot?.installations.first(where: { $0.installPath == selectedNodePath })
+        }
+        guard let selectedVersion = settings.selectedVersion else {
             return nil
         }
         return snapshot?.installations.first(where: { $0.version == selectedVersion })
@@ -32,9 +41,9 @@ final class NodeRuntimeStore: ObservableObject {
             return "未配置"
         }
         if configuredNodeInstallation != nil {
-            return "已通过 NVM 检测到"
+            return "已通过 ENVPilot 环境变量接管"
         }
-        return "已配置，但未通过 NVM 检测到安装"
+        return "已配置，但未检测到对应 ENVPilot Node 路径"
     }
 
     var displayNodeVersion: String {
@@ -43,21 +52,6 @@ final class NodeRuntimeStore: ObservableObject {
 
     var displayJavaVersion: String {
         snapshot?.settings.selectedJavaVersion ?? snapshot?.activeJavaVersion ?? "--"
-    }
-
-    var sdkmanStatus: SDKMANRuntimeStatus {
-        snapshot?.sdkmanStatus ?? .init()
-    }
-
-    var sdkmanStatusText: String {
-        let status = sdkmanStatus
-        if status.isInstalled {
-            return status.hasManagedJavaInstallations ? "已安装（检测到 SDKMAN 管理的 JDK）" : "已安装"
-        }
-        if status.canInstall {
-            return "未安装（可自动安装）"
-        }
-        return "未安装（当前环境不可自动安装）"
     }
 
     var displayNodePath: String {
@@ -102,7 +96,7 @@ final class NodeRuntimeStore: ObservableObject {
     }
 
     func installNode(version: String) async {
-        let progress = makeProgressUpdater()
+        let progress = makeProgressUpdater(candidateID: "node-\(version)")
         await runOperation(message: "正在安装 Node \(version)...") { [self] in
             try await self.runBackground { [service] in
                 try service.installNode(version: version, progress: progress)
@@ -110,6 +104,24 @@ final class NodeRuntimeStore: ObservableObject {
             }
         } onError: { error in
             "安装 Node 版本失败：\(error.localizedDescription)"
+        }
+    }
+
+    func queryNodeDownloadCandidates(ltsOnly: Bool) async {
+        isLoading = true
+        loadingMessage = "正在查询 Node 可安装版本..."
+        defer {
+            isLoading = false
+            loadingMessage = nil
+        }
+
+        do {
+            nodeDownloadCandidates = try await runBackground { [service] in
+                try service.listAvailableNodeVersions(ltsOnly: ltsOnly)
+            }
+            latestError = nil
+        } catch {
+            latestError = "查询 Node 可安装版本失败：\(error.localizedDescription)"
         }
     }
 
@@ -136,66 +148,39 @@ final class NodeRuntimeStore: ObservableObject {
         }
     }
 
-    func installSDKMAN() async {
-        let progress = makeProgressUpdater()
-        await runOperation(message: "正在安装 SDKMAN...") { [self] in
+    func installJava(featureVersion: Int) async {
+        let progress = makeProgressUpdater(candidateID: "java-\(featureVersion)")
+        await runOperation(message: "正在安装 Temurin JDK \(featureVersion)...") { [self] in
             try await self.runBackground { [service] in
-                try service.installSDKMAN(progress: progress)
+                try service.installJava(featureVersion: featureVersion, progress: progress)
                 return try service.loadSnapshot(progress: progress)
             }
         } onError: { error in
-            "安装 SDKMAN 失败：\(error.localizedDescription)"
+            "安装 JDK 失败：\(error.localizedDescription)"
         }
     }
 
-    func installJavaWithSDKMAN(identifier: String) async {
-        let progress = makeProgressUpdater()
-        await runOperation(message: "正在通过 SDKMAN 安装 JDK \(identifier)...") { [self] in
-            try await self.runBackground { [service] in
-                try service.installJavaWithSDKMAN(identifier: identifier, progress: progress)
-                return try service.loadSnapshot(progress: progress)
-            }
-        } onError: { error in
-            "通过 SDKMAN 安装 JDK 失败：\(error.localizedDescription)"
-        }
-        if sdkmanStatus.isInstalled {
-            await querySDKMANJavaCandidates()
-        }
-    }
-
-    func querySDKMANJavaCandidates() async {
+    func queryJavaDownloadCandidates(ltsOnly: Bool) async {
         isLoading = true
-        loadingMessage = "正在查询 SDKMAN JDK 列表..."
+        loadingMessage = "正在查询 JDK 可安装版本..."
         defer {
             isLoading = false
             loadingMessage = nil
         }
 
         do {
-            sdkmanJavaCandidates = try await runBackground { [service] in
-                try service.listAvailableJavaCandidatesWithSDKMAN()
+            javaDownloadCandidates = try await runBackground { [service] in
+                try service.listAvailableJavaVersions(ltsOnly: ltsOnly)
             }
             latestError = nil
         } catch {
-            latestError = "查询 SDKMAN JDK 列表失败：\(error.localizedDescription)"
+            latestError = "查询 JDK 可安装版本失败：\(error.localizedDescription)"
         }
     }
 
-    func clearSDKMANJavaCandidates() {
-        sdkmanJavaCandidates = []
-    }
-
-    func uninstallJavaWithSDKMAN(identifier: String) async {
-        let progress = makeProgressUpdater()
-        await runOperation(message: "正在通过 SDKMAN 卸载 JDK \(identifier)...") { [self] in
-            try await self.runBackground { [service] in
-                try service.uninstallJavaWithSDKMAN(identifier: identifier, progress: progress)
-                return try service.loadSnapshot(progress: progress)
-            }
-        } onError: { error in
-            "通过 SDKMAN 卸载 JDK 失败：\(error.localizedDescription)"
-        }
-        await querySDKMANJavaCandidates()
+    func clearDownloadCandidates() {
+        nodeDownloadCandidates = []
+        javaDownloadCandidates = []
     }
 
     func uninstallJava(version: String, homePath: String) async {
@@ -208,7 +193,6 @@ final class NodeRuntimeStore: ObservableObject {
         } onError: { error in
             "卸载 JDK 失败：\(error.localizedDescription)"
         }
-        await querySDKMANJavaCandidates()
     }
 
     func setSelectedProfile(id: UUID) async {
@@ -259,10 +243,17 @@ final class NodeRuntimeStore: ObservableObject {
         try await Task.detached(priority: .userInitiated, operation: work).value
     }
 
-    private func makeProgressUpdater() -> @Sendable (String) -> Void {
-        { [weak self] message in
+    private func makeProgressUpdater(candidateID: String? = nil) -> @Sendable (String) -> Void {
+        if let candidateID {
+            installingCandidateID = candidateID
+            installingCandidateMessage = nil
+        }
+        return { [weak self] message in
             Task { @MainActor [weak self] in
                 self?.loadingMessage = message
+                if candidateID != nil {
+                    self?.installingCandidateMessage = message
+                }
             }
         }
     }
@@ -277,6 +268,8 @@ final class NodeRuntimeStore: ObservableObject {
         defer {
             isLoading = false
             loadingMessage = nil
+            installingCandidateID = nil
+            installingCandidateMessage = nil
         }
 
         do {
