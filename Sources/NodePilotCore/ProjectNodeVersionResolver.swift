@@ -60,6 +60,36 @@ public struct ProjectJavaVersionResolver {
     }
 }
 
+public struct ProjectPythonVersionResolver {
+    private let fileManager: FileManager
+    private let envPilotParser: ProjectEnvPilotFileParser
+
+    public init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+        self.envPilotParser = ProjectEnvPilotFileParser(fileManager: fileManager)
+    }
+
+    public func resolveVersion(startingAt directory: URL) -> String? {
+        var currentURL = directory.standardizedFileURL
+
+        while true {
+            if let version = version(in: currentURL) {
+                return version
+            }
+
+            let parentURL = currentURL.deletingLastPathComponent()
+            if parentURL.path == currentURL.path {
+                return nil
+            }
+            currentURL = parentURL
+        }
+    }
+
+    private func version(in directory: URL) -> String? {
+        envPilotParser.value(for: "PYTHON_VERSION", in: directory)
+    }
+}
+
 private struct ProjectEnvPilotFileParser {
     private let fileManager: FileManager
 

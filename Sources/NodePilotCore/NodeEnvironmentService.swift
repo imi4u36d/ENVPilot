@@ -11,6 +11,7 @@ public final class NodeEnvironmentService: Sendable {
     private let configStore: any AppSettingsStoring
     private let detector: any NodeInstallationDetecting
     private let javaDetector: any JavaRuntimeDetecting
+    private let pythonDetector: any PythonRuntimeDetecting
     private let componentInstaller: any RuntimeComponentInstalling
     private let shellRunner: any ShellCommandRunning
 
@@ -18,6 +19,7 @@ public final class NodeEnvironmentService: Sendable {
         configStore: any AppSettingsStoring = ConfigStore(),
         detector: (any NodeInstallationDetecting)? = nil,
         javaDetector: (any JavaRuntimeDetecting)? = nil,
+        pythonDetector: (any PythonRuntimeDetecting)? = nil,
         componentInstaller: (any RuntimeComponentInstalling)? = nil,
         shellRunner: any ShellCommandRunning = ShellCommandRunner()
     ) {
@@ -25,6 +27,7 @@ public final class NodeEnvironmentService: Sendable {
         self.shellRunner = shellRunner
         self.detector = detector ?? NodeInstallationDetector(shellRunner: shellRunner)
         self.javaDetector = javaDetector ?? JavaRuntimeDetector(shellRunner: shellRunner)
+        self.pythonDetector = pythonDetector ?? PythonRuntimeDetector(shellRunner: shellRunner)
         self.componentInstaller = componentInstaller ?? RuntimeComponentInstaller(shellRunner: shellRunner)
     }
 
@@ -55,9 +58,20 @@ public final class NodeEnvironmentService: Sendable {
             installations: managedJavaInstallations(from: javaDetector.detectInstallations()),
             selectedJavaHome: settings.selectedJavaHome
         )
-        if settings.cachedNodeInstallations != installations || settings.cachedJavaInstallations != javaInstallations {
+        let detectedActivePythonHome = pythonDetector.detectActivePythonHome()
+        let activePythonHome = managedActivePythonHome(detectedActivePythonHome)
+        let detectedActivePythonVersion = pythonDetector.detectActiveVersion()
+        let activePythonVersion = activePythonHome == nil ? nil : detectedActivePythonVersion
+        let pythonInstallations = mergeDefaultPythonSelection(
+            installations: managedPythonInstallations(from: pythonDetector.detectInstallations()),
+            selectedPythonHome: settings.selectedPythonHome
+        )
+        if settings.cachedNodeInstallations != installations
+            || settings.cachedJavaInstallations != javaInstallations
+            || settings.cachedPythonInstallations != pythonInstallations {
             settings.cachedNodeInstallations = installations
             settings.cachedJavaInstallations = javaInstallations
+            settings.cachedPythonInstallations = pythonInstallations
             try configStore.save(settings)
         }
 
@@ -68,6 +82,9 @@ public final class NodeEnvironmentService: Sendable {
             javaInstallations: javaInstallations,
             activeJavaVersion: activeJavaVersion,
             activeJavaHome: activeJavaHome,
+            pythonInstallations: pythonInstallations,
+            activePythonVersion: activePythonVersion,
+            activePythonHome: activePythonHome,
             settings: settings
         )
     }
@@ -166,6 +183,10 @@ public final class NodeEnvironmentService: Sendable {
         try componentInstaller.listAvailableJavaVersions(ltsOnly: ltsOnly)
     }
 
+    public func listAvailablePythonVersions(stableOnly: Bool = true) throws -> [PythonDownloadCandidate] {
+        try componentInstaller.listAvailablePythonVersions(stableOnly: stableOnly)
+    }
+
     @discardableResult
     public func installJava(featureVersion: Int, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot {
         let installation = try componentInstaller.installJava(featureVersion: featureVersion, progress: progress)
@@ -213,6 +234,65 @@ public final class NodeEnvironmentService: Sendable {
         return try loadSnapshot(progress: progress)
     }
 
+    @discardableResult
+    public func selectDefaultPython(version: String, homePath: String) throws -> NodeRuntimeSnapshot {
+        let installations = managedPythonInstallations(from: pythonDetector.detectInstallations())
+        guard installations.contains(where: { $0.homePath == homePath }) else {
+            throw NodeEnvironmentServiceError.pythonHomeNotInstalled(homePath)
+        }
+
+        var settings = try configStore.load()
+        settings.selectedPythonVersion = version
+        settings.selectedPythonHome = homePath
+        try configStore.save(settings)
+        return try loadSnapshot()
+    }
+
+    @discardableResult
+    public func installPython(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot {
+        let installation = try componentInstaller.installPython(version: version, progress: progress)
+        var settings = try configStore.load()
+        settings.selectedPythonVersion = installation.version
+        settings.selectedPythonHome = installation.homePath
+        try configStore.save(settings)
+        return try loadSnapshot(progress: progress)
+    }
+
+    @discardableResult
+    public func uninstallPython(
+        homePath: String,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeRuntimeSnapshot {
+        let normalizedHomePath = homePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedHomePath.isEmpty else {
+            throw NodeEnvironmentServiceError.pythonHomeNotInstalled(homePath)
+        }
+
+        let installations = managedPythonInstallations(from: pythonDetector.detectInstallations())
+        guard installations.contains(where: { $0.homePath == normalizedHomePath }) else {
+            throw NodeEnvironmentServiceError.pythonHomeNotInstalled(normalizedHomePath)
+        }
+
+        progress?("正在卸载 Python \(normalizedHomePath)...")
+        do {
+            try componentInstaller.uninstallManagedPython(homePath: normalizedHomePath)
+        } catch {
+            throw NodeEnvironmentServiceError.pythonUninstallFailed(
+                path: normalizedHomePath,
+                message: error.localizedDescription
+            )
+        }
+
+        var settings = try configStore.load()
+        if settings.selectedPythonHome == normalizedHomePath {
+            settings.selectedPythonHome = nil
+            settings.selectedPythonVersion = nil
+            try configStore.save(settings)
+        }
+
+        return try loadSnapshot(progress: progress)
+    }
+
     func normalizeOrThrow(_ version: String) throws -> String {
         if let normalized = NodeInstallationDetector.normalizeVersion(version) {
             return normalized
@@ -228,6 +308,10 @@ public final class NodeEnvironmentService: Sendable {
         installations.filter { RuntimeComponentInstaller.isManagedJavaHomePath($0.homePath) }
     }
 
+    func managedPythonInstallations(from installations: [PythonInstallation]) -> [PythonInstallation] {
+        installations.filter { RuntimeComponentInstaller.isManagedPythonHomePath($0.homePath) }
+    }
+
     func managedActiveNodePath(_ path: String?) -> String? {
         guard let path, !path.isEmpty else {
             return nil
@@ -241,6 +325,13 @@ public final class NodeEnvironmentService: Sendable {
             return nil
         }
         return RuntimeComponentInstaller.isManagedJavaHomePath(homePath) ? homePath : nil
+    }
+
+    func managedActivePythonHome(_ homePath: String?) -> String? {
+        guard let homePath, !homePath.isEmpty else {
+            return nil
+        }
+        return RuntimeComponentInstaller.isManagedPythonHomePath(homePath) ? homePath : nil
     }
 
     func mergeDefaultSelection(
@@ -379,6 +470,23 @@ public final class NodeEnvironmentService: Sendable {
         }
     }
 
+    func mergeDefaultPythonSelection(
+        installations: [PythonInstallation],
+        selectedPythonHome: String?
+    ) -> [PythonInstallation] {
+        guard let selectedPythonHome, !selectedPythonHome.isEmpty else {
+            return installations
+        }
+        return installations.map {
+            PythonInstallation(
+                version: $0.version,
+                homePath: $0.homePath,
+                executablePath: $0.executablePath,
+                isDefault: $0.homePath == selectedPythonHome
+            )
+        }
+    }
+
 }
 
 public enum NodeEnvironmentServiceError: Error, LocalizedError {
@@ -386,6 +494,8 @@ public enum NodeEnvironmentServiceError: Error, LocalizedError {
     case nodeVersionNotInstalled(String)
     case javaHomeNotInstalled(String)
     case javaUninstallFailed(path: String, message: String)
+    case pythonHomeNotInstalled(String)
+    case pythonUninstallFailed(path: String, message: String)
 
     public var errorDescription: String? {
         switch self {
@@ -397,6 +507,10 @@ public enum NodeEnvironmentServiceError: Error, LocalizedError {
             return "JDK home is not installed: \(homePath)"
         case .javaUninstallFailed(let path, let message):
             return "Failed to uninstall JDK at \(path): \(message)"
+        case .pythonHomeNotInstalled(let homePath):
+            return "Python home is not installed: \(homePath)"
+        case .pythonUninstallFailed(let path, let message):
+            return "Failed to uninstall Python at \(path): \(message)"
         }
     }
 }

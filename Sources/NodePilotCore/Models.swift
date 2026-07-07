@@ -34,6 +34,24 @@ public struct JavaInstallation: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+public struct PythonInstallation: Identifiable, Codable, Hashable, Sendable {
+    public let version: String
+    public let homePath: String
+    public let executablePath: String
+    public let isDefault: Bool
+
+    public init(version: String, homePath: String, executablePath: String, isDefault: Bool = false) {
+        self.version = version
+        self.homePath = homePath
+        self.executablePath = executablePath
+        self.isDefault = isDefault
+    }
+
+    public var id: String {
+        executablePath
+    }
+}
+
 public struct NodeDownloadCandidate: Identifiable, Codable, Hashable, Sendable {
     public let version: String
     public let lts: String?
@@ -41,6 +59,22 @@ public struct NodeDownloadCandidate: Identifiable, Codable, Hashable, Sendable {
     public init(version: String, lts: String? = nil) {
         self.version = version
         self.lts = lts
+    }
+
+    public var id: String {
+        version
+    }
+}
+
+public struct PythonDownloadCandidate: Identifiable, Codable, Hashable, Sendable {
+    public let version: String
+    public let packageName: String
+    public let downloadURL: String
+
+    public init(version: String, packageName: String, downloadURL: String) {
+        self.version = version
+        self.packageName = packageName
+        self.downloadURL = downloadURL
     }
 
     public var id: String {
@@ -127,32 +161,41 @@ public struct AppSettings: Codable, Sendable {
     public var selectedNodePath: String?
     public var selectedJavaVersion: String?
     public var selectedJavaHome: String?
+    public var selectedPythonVersion: String?
+    public var selectedPythonHome: String?
     public var selectedProfileID: UUID?
     public var projectVersionPreference: ProjectVersionPreference
     public var profiles: [EnvironmentProfile]
     public var cachedNodeInstallations: [NodeInstallation]?
     public var cachedJavaInstallations: [JavaInstallation]?
+    public var cachedPythonInstallations: [PythonInstallation]?
 
     public init(
         selectedVersion: String? = nil,
         selectedNodePath: String? = nil,
         selectedJavaVersion: String? = nil,
         selectedJavaHome: String? = nil,
+        selectedPythonVersion: String? = nil,
+        selectedPythonHome: String? = nil,
         selectedProfileID: UUID? = nil,
         projectVersionPreference: ProjectVersionPreference = .followProjectFiles,
         profiles: [EnvironmentProfile] = AppSettings.defaultProfiles,
         cachedNodeInstallations: [NodeInstallation]? = nil,
-        cachedJavaInstallations: [JavaInstallation]? = nil
+        cachedJavaInstallations: [JavaInstallation]? = nil,
+        cachedPythonInstallations: [PythonInstallation]? = nil
     ) {
         self.selectedVersion = selectedVersion
         self.selectedNodePath = selectedNodePath
         self.selectedJavaVersion = selectedJavaVersion
         self.selectedJavaHome = selectedJavaHome
+        self.selectedPythonVersion = selectedPythonVersion
+        self.selectedPythonHome = selectedPythonHome
         self.selectedProfileID = selectedProfileID
         self.projectVersionPreference = projectVersionPreference
         self.profiles = profiles
         self.cachedNodeInstallations = cachedNodeInstallations
         self.cachedJavaInstallations = cachedJavaInstallations
+        self.cachedPythonInstallations = cachedPythonInstallations
     }
 
     public static let defaultProfiles: [EnvironmentProfile] = [
@@ -167,6 +210,9 @@ public struct NodeRuntimeSnapshot: Sendable {
     public var javaInstallations: [JavaInstallation]
     public var activeJavaVersion: String?
     public var activeJavaHome: String?
+    public var pythonInstallations: [PythonInstallation]
+    public var activePythonVersion: String?
+    public var activePythonHome: String?
     public var settings: AppSettings
 
     public init(
@@ -176,6 +222,9 @@ public struct NodeRuntimeSnapshot: Sendable {
         javaInstallations: [JavaInstallation] = [],
         activeJavaVersion: String? = nil,
         activeJavaHome: String? = nil,
+        pythonInstallations: [PythonInstallation] = [],
+        activePythonVersion: String? = nil,
+        activePythonHome: String? = nil,
         settings: AppSettings
     ) {
         self.installations = installations
@@ -184,6 +233,9 @@ public struct NodeRuntimeSnapshot: Sendable {
         self.javaInstallations = javaInstallations
         self.activeJavaVersion = activeJavaVersion
         self.activeJavaHome = activeJavaHome
+        self.pythonInstallations = pythonInstallations
+        self.activePythonVersion = activePythonVersion
+        self.activePythonHome = activePythonHome
         self.settings = settings
     }
 }

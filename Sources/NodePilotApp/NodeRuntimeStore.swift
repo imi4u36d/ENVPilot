@@ -6,6 +6,7 @@ final class NodeRuntimeStore: ObservableObject {
     @Published private(set) var snapshot: NodeRuntimeSnapshot?
     @Published private(set) var nodeDownloadCandidates: [NodeDownloadCandidate] = []
     @Published private(set) var javaDownloadCandidates: [JavaDownloadCandidate] = []
+    @Published private(set) var pythonDownloadCandidates: [PythonDownloadCandidate] = []
     @Published private(set) var isLoading = false
     @Published private(set) var loadingMessage: String?
     @Published private(set) var installingCandidateID: String?
@@ -54,6 +55,10 @@ final class NodeRuntimeStore: ObservableObject {
         snapshot?.settings.selectedJavaVersion ?? snapshot?.activeJavaVersion ?? "--"
     }
 
+    var displayPythonVersion: String {
+        snapshot?.settings.selectedPythonVersion ?? snapshot?.activePythonVersion ?? "--"
+    }
+
     var displayNodePath: String {
         if let installation = configuredNodeInstallation {
             return installation.installPath
@@ -65,7 +70,11 @@ final class NodeRuntimeStore: ObservableObject {
         guard snapshot != nil else { return "ENVPilot" }
         let node = displayNodeVersion
         let java = displayJavaVersion
+        let python = displayPythonVersion
 
+        if python != "--" {
+            return "Node \(node) | JDK \(java) | Python \(python)"
+        }
         if java != "--" {
             return "Node \(node) | JDK \(java)"
         }
@@ -178,9 +187,51 @@ final class NodeRuntimeStore: ObservableObject {
         }
     }
 
+    func setDefaultPython(version: String, homePath: String) async {
+        await runOperation(message: "正在切换 Python \(version)...") { [self] in
+            try await self.runBackground { [service] in
+                try service.setDefaultPython(version: version, homePath: homePath)
+                return try service.loadSnapshot(progress: nil)
+            }
+        } onError: { error in
+            "设置 Python 版本失败：\(error.localizedDescription)"
+        }
+    }
+
+    func installPython(version: String) async {
+        let progress = makeProgressUpdater(candidateID: "python-\(version)")
+        await runOperation(message: "正在安装 Python \(version)...") { [self] in
+            try await self.runBackground { [service] in
+                try service.installPython(version: version, progress: progress)
+                return try service.loadSnapshot(progress: progress)
+            }
+        } onError: { error in
+            "安装 Python 失败：\(error.localizedDescription)"
+        }
+    }
+
+    func queryPythonDownloadCandidates(stableOnly: Bool) async {
+        isLoading = true
+        loadingMessage = "正在查询 Python 可安装版本..."
+        defer {
+            isLoading = false
+            loadingMessage = nil
+        }
+
+        do {
+            pythonDownloadCandidates = try await runBackground { [service] in
+                try service.listAvailablePythonVersions(stableOnly: stableOnly)
+            }
+            latestError = nil
+        } catch {
+            latestError = "查询 Python 可安装版本失败：\(error.localizedDescription)"
+        }
+    }
+
     func clearDownloadCandidates() {
         nodeDownloadCandidates = []
         javaDownloadCandidates = []
+        pythonDownloadCandidates = []
     }
 
     func uninstallJava(version: String, homePath: String) async {
@@ -192,6 +243,18 @@ final class NodeRuntimeStore: ObservableObject {
             }
         } onError: { error in
             "卸载 JDK 失败：\(error.localizedDescription)"
+        }
+    }
+
+    func uninstallPython(version: String, homePath: String) async {
+        let progress = makeProgressUpdater()
+        await runOperation(message: "正在卸载 Python \(version)...") { [self] in
+            try await self.runBackground { [service] in
+                try service.uninstallPython(homePath: homePath, progress: progress)
+                return try service.loadSnapshot(progress: progress)
+            }
+        } onError: { error in
+            "卸载 Python 失败：\(error.localizedDescription)"
         }
     }
 

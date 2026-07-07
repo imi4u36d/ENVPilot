@@ -45,13 +45,18 @@ private struct CLIStatusOutput: Codable {
     let selected_profile_name: String
     let selected_java_version: String
     let selected_java_home: String
+    let selected_python_version: String
+    let selected_python_home: String
     let profiles_count: Int
     let detected_node_versions: [VersionLocation]
     let detected_jdk_versions: [VersionLocation]
+    let detected_python_versions: [VersionLocation]
     let active_node_version: String
     let active_node_path: String
     let active_java_version: String
     let active_java_home: String
+    let active_python_version: String
+    let active_python_home: String
     let settings_exists: Bool
     let config_path: String
     let settings_path: String
@@ -151,12 +156,16 @@ struct ENVPilotCLI {
                 try runInstallNode(arguments: commandArguments)
             case "install-jdk":
                 try runInstallJDK(arguments: commandArguments)
+            case "install-python":
+                try runInstallPython(arguments: commandArguments)
             case "set-profile":
                 try runSetProfile(arguments: commandArguments)
             case "profile":
                 try runProfile(arguments: commandArguments)
             case "set-jdk":
                 try runSetJDK(arguments: commandArguments)
+            case "set-python":
+                try runSetPython(arguments: commandArguments)
             case "config":
                 try runConfig(arguments: commandArguments)
             case "use":
@@ -214,13 +223,18 @@ struct ENVPilotCLI {
             selected_profile_name: selectedProfile?.name ?? "",
             selected_java_version: settings.selectedJavaVersion ?? "",
             selected_java_home: settings.selectedJavaHome ?? "",
+            selected_python_version: settings.selectedPythonVersion ?? "",
+            selected_python_home: settings.selectedPythonHome ?? "",
             profiles_count: settings.profiles.count,
             detected_node_versions: snapshot.installations.map { .init(version: $0.version, path: $0.installPath) },
             detected_jdk_versions: snapshot.javaInstallations.map { .init(version: $0.version, path: $0.homePath) },
+            detected_python_versions: snapshot.pythonInstallations.map { .init(version: $0.version, path: $0.homePath) },
             active_node_version: snapshot.activeVersion ?? "",
             active_node_path: snapshot.activeNodePath ?? "",
             active_java_version: snapshot.activeJavaVersion ?? "",
             active_java_home: snapshot.activeJavaHome ?? "",
+            active_python_version: snapshot.activePythonVersion ?? "",
+            active_python_home: snapshot.activePythonHome ?? "",
             settings_exists: settingsExists,
             config_path: settingsPath,
             settings_path: settingsPath,
@@ -244,13 +258,18 @@ struct ENVPilotCLI {
             print("selected_profile_name=\(output.selected_profile_name)")
             print("selected_java_version=\(output.selected_java_version)")
             print("selected_java_home=\(output.selected_java_home)")
+            print("selected_python_version=\(output.selected_python_version)")
+            print("selected_python_home=\(output.selected_python_home)")
             print("profiles_count=\(output.profiles_count)")
             print("detected_node_versions=\(output.detected_node_versions.map { "\($0.version):\($0.path)" }.joined(separator: ","))")
             print("detected_jdk_versions=\(output.detected_jdk_versions.map { "\($0.version):\($0.path)" }.joined(separator: ","))")
+            print("detected_python_versions=\(output.detected_python_versions.map { "\($0.version):\($0.path)" }.joined(separator: ","))")
             print("active_node_version=\(output.active_node_version)")
             print("active_node_path=\(output.active_node_path)")
             print("active_java_version=\(output.active_java_version)")
             print("active_java_home=\(output.active_java_home)")
+            print("active_python_version=\(output.active_python_version)")
+            print("active_python_home=\(output.active_python_home)")
             print("settings_exists=\(output.settings_exists)")
             print("config_path=\(output.config_path)")
             print("settings_path=\(output.settings_path)")
@@ -345,7 +364,7 @@ struct ENVPilotCLI {
         let positionals = positionalArguments(from: arguments, flagOptions: ["--lts"])
         guard positionals.count == 1 else {
             throw CLIError(
-                description: "available requires <n|node|j|java|jdk>",
+                description: "available requires <n|node|j|java|jdk|py|python>",
                 exitCode: .usageError
             )
         }
@@ -371,9 +390,19 @@ struct ENVPilotCLI {
             case .json:
                 try printJSON(candidates)
             }
+        case "py", "python", "python3":
+            let candidates = try runtimeService.listAvailablePythonVersions(stableOnly: true)
+            switch format {
+            case .text:
+                for candidate in candidates {
+                    print("\(candidate.version)\t\(candidate.packageName)")
+                }
+            case .json:
+                try printJSON(candidates)
+            }
         default:
             throw CLIError(
-                description: "Unsupported runtime: \(positionals[0]). Allowed: n|node|j|java|jdk",
+                description: "Unsupported runtime: \(positionals[0]). Allowed: n|node|j|java|jdk|py|python",
                 exitCode: .usageError
             )
         }
@@ -405,6 +434,20 @@ struct ENVPilotCLI {
         }
         let snapshot = try runtimeService.installJava(featureVersion: featureVersion, progress: cliProgressPrinter())
         print("installed jdk \(snapshot.settings.selectedJavaVersion ?? rawFeatureVersion)")
+    }
+
+    private func runInstallPython(arguments: [String]) throws {
+        try validateOptions(in: arguments, allowedOptions: ["--dry-run"])
+        let positionals = positionalArguments(from: arguments)
+        guard let version = positionals.first else {
+            throw CLIError(description: "install-python requires <version>", exitCode: .usageError)
+        }
+        if parseFlagOption(name: "--dry-run", in: arguments) {
+            print("dry-run: would install Python \(version) through ENVPilot")
+            return
+        }
+        let snapshot = try runtimeService.installPython(version: version, progress: cliProgressPrinter())
+        print("installed python \(snapshot.settings.selectedPythonVersion ?? version)")
     }
 
     private func runSetProfile(arguments: [String]) throws {
@@ -493,6 +536,45 @@ struct ENVPilotCLI {
         settings.selectedJavaHome = selected.homePath
         try configStore.save(settings)
         print("selected jdk \(selected.version) (\(selected.homePath))")
+    }
+
+    private func runSetPython(arguments: [String]) throws {
+        try validateOptions(
+            in: arguments,
+            allowedOptions: ["--dry-run"]
+        )
+        let positionals = positionalArguments(from: arguments)
+        guard let pythonRef = positionals.first else {
+            throw CLIError(
+                description: "set-python requires <version-or-home-path>",
+                exitCode: .usageError
+            )
+        }
+
+        let dryRun = parseFlagOption(name: "--dry-run", in: arguments)
+        var settings = try configStore.load()
+        let installations = try runtimeService.loadSnapshot().pythonInstallations
+
+        let matched: PythonInstallation?
+        if pythonRef.contains("/") {
+            matched = installations.first(where: { $0.homePath == pythonRef })
+        } else {
+            matched = installations.first(where: { $0.version == pythonRef || $0.version.hasPrefix(pythonRef + ".") })
+        }
+
+        guard let selected = matched else {
+            throw CLIError(description: "Cannot find installed Python matching: \(pythonRef)")
+        }
+
+        if dryRun {
+            print("dry-run: would select python \(selected.version) (\(selected.homePath))")
+            return
+        }
+
+        settings.selectedPythonVersion = selected.version
+        settings.selectedPythonHome = selected.homePath
+        try configStore.save(settings)
+        print("selected python \(selected.version) (\(selected.homePath))")
     }
 
     private func runProfile(arguments: [String]) throws {
@@ -1000,6 +1082,10 @@ struct ENVPilotCLI {
             print(settings.selectedJavaVersion ?? "")
         case "selected-java-home":
             print(settings.selectedJavaHome ?? "")
+        case "selected-python-version":
+            print(settings.selectedPythonVersion ?? "")
+        case "selected-python-home":
+            print(settings.selectedPythonHome ?? "")
         case "selected-profile-id":
             print(selectedProfile?.id.uuidString ?? "")
         case "selected-profile-name":
@@ -1066,6 +1152,18 @@ struct ENVPilotCLI {
             }
             try configStore.save(settings)
             print("updated selected-java")
+        case "selected-python":
+            var settings = try configStore.load()
+            if value == "none" {
+                settings.selectedPythonVersion = nil
+                settings.selectedPythonHome = nil
+            } else {
+                let installation = try resolvePythonInstallationOrThrow(reference: value)
+                settings.selectedPythonVersion = installation.version
+                settings.selectedPythonHome = installation.homePath
+            }
+            try configStore.save(settings)
+            print("updated selected-python")
         default:
             throw CLIError(
                 description: "Unsupported config key: \(key)",
@@ -1079,7 +1177,7 @@ struct ENVPilotCLI {
         let positionals = positionalArguments(from: arguments, optionsWithValue: ["--cwd"])
         guard positionals.count == 2 else {
             throw CLIError(
-                description: "use requires <n|node|j|java|jdk> <version>",
+                description: "use requires <n|node|j|java|jdk|py|python> <version>",
                 exitCode: .usageError
             )
         }
@@ -1102,9 +1200,13 @@ struct ENVPilotCLI {
             let version = try resolveCachedJavaVersionOrThrow(requestedVersion, settings: settings)
             try writeProjectRuntimeValue(key: "JAVA_VERSION", value: version, directory: cwd)
             print("updated .envpilot: JAVA_VERSION=\(version)")
+        case "py", "python", "python3":
+            let version = try resolveCachedPythonVersionOrThrow(requestedVersion, settings: settings)
+            try writeProjectRuntimeValue(key: "PYTHON_VERSION", value: version, directory: cwd)
+            print("updated .envpilot: PYTHON_VERSION=\(version)")
         default:
             throw CLIError(
-                description: "Unsupported runtime: \(positionals[0]). Allowed: n|node|j|java|jdk",
+                description: "Unsupported runtime: \(positionals[0]). Allowed: n|node|j|java|jdk|py|python",
                 exitCode: .usageError
             )
         }
@@ -1116,7 +1218,7 @@ struct ENVPilotCLI {
         let positionals = positionalArguments(from: arguments)
         guard positionals.count <= 1 else {
             throw CLIError(
-                description: "list requires no arguments or <n|node|j|java|jdk>",
+                description: "list requires no arguments or <n|node|j|java|jdk|py|python>",
                 exitCode: .usageError
             )
         }
@@ -1129,15 +1231,18 @@ struct ENVPilotCLI {
             try printRuntimeList(
                 nodeInstallations: snapshot.installations,
                 javaInstallations: snapshot.javaInstallations,
+                pythonInstallations: snapshot.pythonInstallations,
                 format: format
             )
         case "n", "node":
             try printNodeList(snapshot.installations, format: format)
         case "j", "java", "jdk":
             try printJavaList(snapshot.javaInstallations, format: format)
+        case "py", "python", "python3":
+            try printPythonList(snapshot.pythonInstallations, format: format)
         default:
             throw CLIError(
-                description: "Unsupported runtime: \(positionals[0]). Allowed: n|node|j|java|jdk",
+                description: "Unsupported runtime: \(positionals[0]). Allowed: n|node|j|java|jdk|py|python",
                 exitCode: .usageError
             )
         }
@@ -1501,6 +1606,23 @@ struct ENVPilotCLI {
         return resolved
     }
 
+    private func resolvePythonInstallationOrThrow(reference: String) throws -> PythonInstallation {
+        let installations = try runtimeService.loadSnapshot().pythonInstallations
+        let resolved: PythonInstallation?
+        if reference.contains("/") {
+            resolved = installations.first(where: { $0.homePath == reference })
+        } else {
+            resolved = installations.first(where: { $0.version == reference || $0.version.hasPrefix(reference + ".") })
+        }
+        guard let resolved else {
+            throw CLIError(
+                description: "Cannot find installed Python matching: \(reference)",
+                exitCode: .usageError
+            )
+        }
+        return resolved
+    }
+
     private func resolveCachedNodeVersionOrThrow(_ reference: String, settings: AppSettings) throws -> String {
         let installations = settings.cachedNodeInstallations ?? []
         guard !installations.isEmpty else {
@@ -1562,6 +1684,37 @@ struct ENVPilotCLI {
         return nil
     }
 
+    private func resolveCachedPythonVersionOrThrow(_ reference: String, settings: AppSettings) throws -> String {
+        let installations = settings.cachedPythonInstallations ?? []
+        guard !installations.isEmpty else {
+            throw CLIError(
+                description: "No cached Python runtimes. Open ENVPilot and refresh runtimes, or run envpilot-helper status first.",
+                exitCode: .runtimeFailure
+            )
+        }
+
+        if let version = cachedPythonVersionMatching(reference, settings: settings) {
+            return version
+        }
+
+        throw CLIError(
+            description: "Cannot find cached Python matching: \(reference). Refresh runtimes in ENVPilot first.",
+            exitCode: .runtimeFailure
+        )
+    }
+
+    private func cachedPythonVersionMatching(_ reference: String, settings: AppSettings) -> String? {
+        let installations = settings.cachedPythonInstallations ?? []
+        let normalizedReference = PythonRuntimeDetector.normalizeVersion(reference) ?? reference
+        if let exactMatch = installations.first(where: { $0.version == normalizedReference }) {
+            return exactMatch.version
+        }
+        if let featureMatch = installations.first(where: { $0.version.hasPrefix("\(normalizedReference).") }) {
+            return featureMatch.version
+        }
+        return nil
+    }
+
     private func writeProjectRuntimeValue(key: String, value: String, directory: URL) throws {
         if value.contains(where: \.isNewline) {
             throw CLIError(description: "\(key) cannot contain newlines", exitCode: .usageError)
@@ -1609,6 +1762,7 @@ struct ENVPilotCLI {
     private func printRuntimeList(
         nodeInstallations: [NodeInstallation],
         javaInstallations: [JavaInstallation],
+        pythonInstallations: [PythonInstallation],
         format: CLIOutputFormat
     ) throws {
         switch format {
@@ -1617,10 +1771,13 @@ struct ENVPilotCLI {
             printVersionLocations(nodeInstallations.map { VersionLocation(version: $0.version, path: $0.installPath) })
             print("java:")
             printVersionLocations(javaInstallations.map { VersionLocation(version: $0.version, path: $0.homePath) })
+            print("python:")
+            printVersionLocations(pythonInstallations.map { VersionLocation(version: $0.version, path: $0.homePath) })
         case .json:
             try printJSON([
                 "node": nodeInstallations.map { VersionLocation(version: $0.version, path: $0.installPath) },
                 "java": javaInstallations.map { VersionLocation(version: $0.version, path: $0.homePath) },
+                "python": pythonInstallations.map { VersionLocation(version: $0.version, path: $0.homePath) },
             ])
         }
     }
@@ -1636,6 +1793,16 @@ struct ENVPilotCLI {
     }
 
     private func printJavaList(_ installations: [JavaInstallation], format: CLIOutputFormat) throws {
+        let locations = installations.map { VersionLocation(version: $0.version, path: $0.homePath) }
+        switch format {
+        case .text:
+            printVersionLocations(locations)
+        case .json:
+            try printJSON(locations)
+        }
+    }
+
+    private func printPythonList(_ installations: [PythonInstallation], format: CLIOutputFormat) throws {
         let locations = installations.map { VersionLocation(version: $0.version, path: $0.homePath) }
         switch format {
         case .text:
@@ -1825,9 +1992,10 @@ struct ENVPilotCLI {
           status [--cwd <path>] [--format text|json] [--fields <k1,k2>] [--include-profile]
           doctor [--format text|json] [--check <id>]
           set-version <version> [--dry-run]
-          available <n|node|j|java|jdk> [--format text|json] [--lts]
+          available <n|node|j|java|jdk|py|python> [--format text|json] [--lts]
           install-node <version> [--dry-run]
           install-jdk <feature-version> [--dry-run]
+          install-python <version> [--dry-run]
           set-profile <profile-name-or-id> [--dry-run]
           profile list [--format text|json]
           profile get <profile-id|name> [--format text|json]
@@ -1840,16 +2008,20 @@ struct ENVPilotCLI {
           profile var unset <profile-id|name> <KEY> [--dry-run]
           profile var list <profile-id|name> [--format text|json]
           set-jdk <version-or-home-path> [--dry-run]
-          list [n|node|j|java] [--format text|json]
+          set-python <version-or-home-path> [--dry-run]
+          list [n|node|j|java|py|python] [--format text|json]
           use n <version> [--cwd <path>]
           use j <version> [--cwd <path>]
+          use py <version> [--cwd <path>]
           use node <version> [--cwd <path>]
           use java <version> [--cwd <path>]
-          config get <project-version-preference|selected-version|selected-java-version|selected-java-home|selected-profile-id|selected-profile-name>
+          use python <version> [--cwd <path>]
+          config get <project-version-preference|selected-version|selected-java-version|selected-java-home|selected-python-version|selected-python-home|selected-profile-id|selected-profile-name>
           config set project-version-preference <globalDefault|followProjectFiles>
           config set selected-version <version|none>
           config set selected-profile <profile-id|name|none>
           config set selected-java <version-or-home-path|none>
+          config set selected-python <version-or-home-path|none>
           activate [--cwd <path>] [--format text|json]
           install-snippet [--helper-path <path>] [--format text|json]
         """

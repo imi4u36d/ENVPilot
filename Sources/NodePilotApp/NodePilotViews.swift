@@ -75,6 +75,12 @@ struct MenuBarContentView: View {
                 detail: store.snapshot?.activeJavaHome ?? "未配置 JAVA_HOME",
                 systemImage: "cup.and.saucer"
             )
+            RuntimeMenuRow(
+                title: "Python",
+                value: store.displayPythonVersion,
+                detail: store.snapshot?.activePythonHome ?? "未配置 Python",
+                systemImage: "curlybraces"
+            )
         }
         .padding(12)
     }
@@ -104,6 +110,16 @@ struct MenuBarContentView: View {
                     version: { $0.version },
                     path: { $0.homePath },
                     action: { item in Task { await store.setDefaultJava(version: item.version, homePath: item.homePath) } }
+                )
+
+                QuickRuntimeMenu(
+                    title: "Python",
+                    emptyTitle: "未发现 Python",
+                    items: Array(snapshot.pythonInstallations.prefix(5)),
+                    isSelected: { snapshot.settings.selectedPythonHome == $0.homePath },
+                    version: { $0.version },
+                    path: { $0.homePath },
+                    action: { item in Task { await store.setDefaultPython(version: item.version, homePath: item.homePath) } }
                 )
             } else {
                 Text("正在载入运行时信息...")
@@ -147,8 +163,10 @@ struct SettingsView: View {
     @State private var newProfileName = ""
     @State private var nodeCandidateSearchText = ""
     @State private var javaCandidateSearchText = ""
+    @State private var pythonCandidateSearchText = ""
     @State private var nodeCandidatesLTSOnly = true
     @State private var javaCandidatesLTSOnly = true
+    @State private var pythonCandidatesStableOnly = true
     @State private var projectPreference: ProjectVersionPreference = .followProjectFiles
     @State private var isSynchronizing = false
 
@@ -167,9 +185,6 @@ struct SettingsView: View {
                             refreshAction: { Task { await store.refresh() } }
                         )
 
-                        if store.isLoading {
-                            ProgressBanner(message: store.loadingMessage ?? "正在处理...")
-                        }
                         if let message = store.latestError {
                             InlineMessage(message: message, systemImage: "exclamationmark.triangle.fill", color: .red)
                         }
@@ -220,6 +235,8 @@ struct SettingsView: View {
             nodeSection
         case .jdk:
             jdkSection
+        case .python:
+            pythonSection
         case .project:
             projectSection
         case .profiles:
@@ -246,6 +263,14 @@ struct SettingsView: View {
         return isInstalled ? "已下载" : "未下载"
     }
 
+    private var configuredPythonOverviewStatus: String {
+        guard let selectedPythonHome = store.snapshot?.settings.selectedPythonHome, !selectedPythonHome.isEmpty else {
+            return "未配置"
+        }
+        let isInstalled = store.snapshot?.pythonInstallations.contains { $0.homePath == selectedPythonHome } == true
+        return isInstalled ? "已下载" : "未下载"
+    }
+
     private var overviewSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             GroupBox {
@@ -269,6 +294,8 @@ struct SettingsView: View {
                         MetricTile(title: "Node 状态", value: configuredNodeOverviewStatus, systemImage: "terminal")
                         MetricTile(title: "JDK 已选版本", value: store.snapshot?.settings.selectedJavaVersion ?? "--", systemImage: "cup.and.saucer")
                         MetricTile(title: "JDK 状态", value: configuredJavaOverviewStatus, systemImage: "terminal")
+                        MetricTile(title: "Python 已选版本", value: store.snapshot?.settings.selectedPythonVersion ?? "--", systemImage: "curlybraces")
+                        MetricTile(title: "Python 状态", value: configuredPythonOverviewStatus, systemImage: "terminal")
                     }
 
                     Divider()
@@ -277,6 +304,7 @@ struct SettingsView: View {
                         PathRow(title: "Node 安装目录（已选）", value: store.configuredNodeInstallation?.installPath ?? "未选择")
                         PathRow(title: "ENVPilot node 可执行文件", value: store.configuredNodeInstallation?.executablePath ?? "未选择")
                         PathRow(title: "JAVA_HOME（已选）", value: store.snapshot?.settings.selectedJavaHome ?? "未选择")
+                        PathRow(title: "PYTHON_HOME（已选）", value: store.snapshot?.settings.selectedPythonHome ?? "未选择")
                     }
                 }
             }
@@ -312,12 +340,14 @@ struct SettingsView: View {
                     VStack(spacing: 8) {
                         ForEach(installations) { item in
                             let canUninstall = isManagedNodePath(item.installPath)
+                            let isSelected = isNodeSelected(item: item)
                             RuntimeListRow(
                                 title: "Node \(item.version)",
                                 path: item.installPath,
                                 badges: nodeBadges(for: item),
-                                primaryTitle: "切换",
+                                primaryTitle: isSelected ? "" : "切换",
                                 primarySystemImage: "arrow.triangle.2.circlepath",
+                                primaryStatusBadge: isSelected ? StatusBadgeModel(text: "已选中", systemImage: "checkmark.circle.fill", color: .green) : nil,
                                 destructiveTitle: canUninstall ? "卸载" : "",
                                 primaryAction: { Task { await store.setDefaultNode(version: item.version) } },
                                 destructiveAction: { Task { await store.uninstallNode(version: item.version) } },
@@ -354,12 +384,14 @@ struct SettingsView: View {
                     VStack(spacing: 8) {
                         ForEach(javaInstallations) { jdk in
                             let canUninstall = isManagedJavaPath(jdk.homePath)
+                            let isSelected = store.snapshot?.settings.selectedJavaHome == jdk.homePath
                             RuntimeListRow(
                                 title: "JDK \(jdk.version)",
                                 path: jdk.homePath,
                                 badges: javaBadges(for: jdk),
-                                primaryTitle: "切换",
+                                primaryTitle: isSelected ? "" : "切换",
                                 primarySystemImage: "arrow.triangle.2.circlepath",
+                                primaryStatusBadge: isSelected ? StatusBadgeModel(text: "已选中", systemImage: "checkmark.circle.fill", color: .green) : nil,
                                 destructiveTitle: canUninstall ? "卸载" : "",
                                 primaryAction: { Task { await store.setDefaultJava(version: jdk.version, homePath: jdk.homePath) } },
                                 destructiveAction: { Task { await store.uninstallJava(version: jdk.version, homePath: jdk.homePath) } },
@@ -372,6 +404,49 @@ struct SettingsView: View {
                         title: "未发现 ENVPilot JDK",
                         message: "可以在上方查询 Temurin 候选版本并安装到 ENVPilot 目录。",
                         systemImage: "cup.and.saucer"
+                    )
+                }
+            }
+        }
+    }
+
+    private var pythonSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 16) {
+                    SectionHeader(
+                        title: "Python",
+                        subtitle: "从 Python 官方源码构建到 ENVPilot 目录，并通过 PATH 切换 python3。",
+                        systemImage: "curlybraces"
+                    )
+                    installPythonPanel
+                }
+            }
+
+            GroupBox("已安装 Python") {
+                if let pythonInstallations = store.snapshot?.pythonInstallations, !pythonInstallations.isEmpty {
+                    VStack(spacing: 8) {
+                        ForEach(pythonInstallations) { python in
+                            let isSelected = store.snapshot?.settings.selectedPythonHome == python.homePath
+                            RuntimeListRow(
+                                title: "Python \(python.version)",
+                                path: python.homePath,
+                                badges: pythonBadges(for: python),
+                                primaryTitle: isSelected ? "" : "切换",
+                                primarySystemImage: "arrow.triangle.2.circlepath",
+                                primaryStatusBadge: isSelected ? StatusBadgeModel(text: "已选中", systemImage: "checkmark.circle.fill", color: .green) : nil,
+                                destructiveTitle: isManagedPythonPath(python.homePath) ? "卸载" : "",
+                                primaryAction: { Task { await store.setDefaultPython(version: python.version, homePath: python.homePath) } },
+                                destructiveAction: { Task { await store.uninstallPython(version: python.version, homePath: python.homePath) } },
+                                isDisabled: store.isLoading
+                            )
+                        }
+                    }
+                } else {
+                    EmptyState(
+                        title: "未发现 ENVPilot Python",
+                        message: "可以在上方查询 Python 官方候选版本并安装到 ENVPilot 目录。",
+                        systemImage: "curlybraces"
                     )
                 }
             }
@@ -476,6 +551,59 @@ struct SettingsView: View {
                             actionTitle: isInstalled ? "已下载" : (isInstalling ? "安装中" : "安装"),
                             actionSystemImage: isInstalled ? "checkmark.circle" : (isInstalling ? "hourglass" : "square.and.arrow.down"),
                             action: { Task { await store.installJava(featureVersion: candidate.featureVersion) } },
+                            isDisabled: store.isLoading || isInstalled
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private var installPythonPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .bottom, spacing: 12) {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("搜索 Python 版本")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.primary)
+                    TextField("过滤版本，例如 3.14、3.13 或 3.12", text: $pythonCandidateSearchText)
+                        .textFieldStyle(EnvPilotTextFieldStyle())
+                        .disabled(store.isLoading)
+                }
+                Toggle("仅稳定版", isOn: $pythonCandidatesStableOnly)
+                    .toggleStyle(.switch)
+                    .disabled(store.isLoading)
+                Button {
+                    Task { await store.queryPythonDownloadCandidates(stableOnly: pythonCandidatesStableOnly) }
+                } label: {
+                    Label("查询", systemImage: "arrow.clockwise")
+                }
+                .controlSize(.large)
+                .buttonStyle(.borderedProminent)
+                .disabled(store.isLoading)
+            }
+            .padding(14)
+            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(AppPalette.borderStrong, lineWidth: 1)
+            }
+
+            if store.pythonDownloadCandidates.isEmpty {
+                InlineMessage(message: "点击查询后展示 Python 官方可下载源码版本；安装会在本机编译，耗时会比 Node/JDK 更长。", systemImage: "info.circle", color: .blue)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(filteredPythonDownloadCandidates.prefix(12)) { candidate in
+                        let isInstalled = isPythonCandidateInstalled(candidate)
+                        let isInstalling = store.installingCandidateID == pythonCandidateID(candidate)
+                        DownloadCandidateRow(
+                            title: "Python \(candidate.version)",
+                            subtitle: "CPython source · \(candidate.packageName)",
+                            badges: pythonCandidateBadges(candidate, isInstalled: isInstalled),
+                            progressMessage: isInstalling ? store.installingCandidateMessage : nil,
+                            actionTitle: isInstalled ? "已下载" : (isInstalling ? "安装中" : "安装"),
+                            actionSystemImage: isInstalled ? "checkmark.circle" : (isInstalling ? "hourglass" : "square.and.arrow.down"),
+                            action: { Task { await store.installPython(version: candidate.version) } },
                             isDisabled: store.isLoading || isInstalled
                         )
                     }
@@ -730,13 +858,26 @@ struct SettingsView: View {
         }
     }
 
+    private var filteredPythonDownloadCandidates: [PythonDownloadCandidate] {
+        let query = pythonCandidateSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else {
+            return store.pythonDownloadCandidates
+        }
+        return store.pythonDownloadCandidates.filter { candidate in
+            [
+                candidate.version,
+                candidate.packageName,
+            ]
+            .joined(separator: " ")
+            .lowercased()
+            .contains(query)
+        }
+    }
+
     private func nodeBadges(for item: NodeInstallation) -> [StatusBadgeModel] {
         var badges: [StatusBadgeModel] = []
         if isManagedNodePath(item.installPath) {
             badges.append(StatusBadgeModel(text: "ENVPilot", systemImage: "checkmark.seal.fill", color: .orange))
-        }
-        if isNodeSelected(item: item) {
-            badges.append(StatusBadgeModel(text: "已选中", systemImage: "checkmark.circle.fill", color: .green))
         }
         return badges
     }
@@ -746,9 +887,20 @@ struct SettingsView: View {
         if isManagedJavaPath(jdk.homePath) {
             badges.append(StatusBadgeModel(text: "ENVPilot", systemImage: "checkmark.seal.fill", color: .orange))
         }
-        if store.snapshot?.settings.selectedJavaHome == jdk.homePath {
-            badges.append(StatusBadgeModel(text: "已选中", systemImage: "checkmark.circle.fill", color: .green))
-        } else if store.snapshot?.activeJavaHome == jdk.homePath {
+        if store.snapshot?.settings.selectedJavaHome != jdk.homePath,
+           store.snapshot?.activeJavaHome == jdk.homePath {
+            badges.append(StatusBadgeModel(text: "运行中", systemImage: "play.circle.fill", color: .blue))
+        }
+        return badges
+    }
+
+    private func pythonBadges(for python: PythonInstallation) -> [StatusBadgeModel] {
+        var badges: [StatusBadgeModel] = []
+        if isManagedPythonPath(python.homePath) {
+            badges.append(StatusBadgeModel(text: "ENVPilot", systemImage: "checkmark.seal.fill", color: .orange))
+        }
+        if store.snapshot?.settings.selectedPythonHome != python.homePath,
+           store.snapshot?.activePythonHome == python.homePath {
             badges.append(StatusBadgeModel(text: "运行中", systemImage: "play.circle.fill", color: .blue))
         }
         return badges
@@ -769,6 +921,10 @@ struct SettingsView: View {
 
     private func isManagedJavaPath(_ path: String) -> Bool {
         path.contains("/.envpilot/runtimes/java/")
+    }
+
+    private func isManagedPythonPath(_ path: String) -> Bool {
+        path.contains("/.envpilot/runtimes/python/")
     }
 
     private func synchronizeFromSnapshot() {
@@ -808,12 +964,20 @@ struct SettingsView: View {
         "java-\(candidate.featureVersion)"
     }
 
+    private func pythonCandidateID(_ candidate: PythonDownloadCandidate) -> String {
+        "python-\(candidate.version)"
+    }
+
     private func isNodeCandidateInstalled(_ candidate: NodeDownloadCandidate) -> Bool {
         store.snapshot?.installations.contains { $0.version == candidate.version } == true
     }
 
     private func isJavaCandidateInstalled(_ candidate: JavaDownloadCandidate) -> Bool {
         store.snapshot?.javaInstallations.contains { javaVersion($0.version, matchesFeatureVersion: candidate.featureVersion) } == true
+    }
+
+    private func isPythonCandidateInstalled(_ candidate: PythonDownloadCandidate) -> Bool {
+        store.snapshot?.pythonInstallations.contains { $0.version == candidate.version } == true
     }
 
     private func nodeCandidateBadges(_ candidate: NodeDownloadCandidate, isInstalled: Bool) -> [StatusBadgeModel] {
@@ -835,6 +999,15 @@ struct SettingsView: View {
         if candidate.version.contains("LTS") || [25, 21, 17, 11, 8].contains(candidate.featureVersion) {
             badges.append(StatusBadgeModel(text: "LTS", systemImage: "clock.badge.checkmark", color: .blue))
         }
+        return badges
+    }
+
+    private func pythonCandidateBadges(_ candidate: PythonDownloadCandidate, isInstalled: Bool) -> [StatusBadgeModel] {
+        var badges: [StatusBadgeModel] = []
+        if isInstalled {
+            badges.append(StatusBadgeModel(text: "已下载", systemImage: "checkmark.circle.fill", color: .green))
+        }
+        badges.append(StatusBadgeModel(text: "官方源码", systemImage: "curlybraces", color: .blue))
         return badges
     }
 
@@ -1059,6 +1232,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     case overview
     case node
     case jdk
+    case python
     case project
     case profiles
 
@@ -1074,6 +1248,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
             return "Node"
         case .jdk:
             return "JDK"
+        case .python:
+            return "Python"
         case .project:
             return "项目策略"
         case .profiles:
@@ -1089,6 +1265,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
             return "查询、安装、切换和卸载 ENVPilot 管理的 Node。"
         case .jdk:
             return "查询、安装、切换和卸载 ENVPilot 管理的 JDK。"
+        case .python:
+            return "查询、安装、切换和卸载 ENVPilot 管理的 Python。"
         case .project:
             return "配置进入项目目录时的版本选择规则。"
         case .profiles:
@@ -1104,6 +1282,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
             return "shippingbox"
         case .jdk:
             return "cup.and.saucer"
+        case .python:
+            return "curlybraces"
         case .project:
             return "folder.badge.gearshape"
         case .profiles:
@@ -1347,6 +1527,7 @@ private struct RuntimeListRow: View {
     let badges: [StatusBadgeModel]
     let primaryTitle: String
     let primarySystemImage: String
+    let primaryStatusBadge: StatusBadgeModel?
     let destructiveTitle: String
     let primaryAction: () -> Void
     let destructiveAction: () -> Void
@@ -1370,12 +1551,20 @@ private struct RuntimeListRow: View {
                     .truncationMode(.middle)
             }
             Spacer()
-            Button {
-                primaryAction()
-            } label: {
-                Label(primaryTitle, systemImage: primarySystemImage)
+            if let primaryStatusBadge {
+                StatusBadge(
+                    text: primaryStatusBadge.text,
+                    systemImage: primaryStatusBadge.systemImage,
+                    color: primaryStatusBadge.color
+                )
+            } else if !primaryTitle.isEmpty {
+                Button {
+                    primaryAction()
+                } label: {
+                    Label(primaryTitle, systemImage: primarySystemImage)
+                }
+                .disabled(isDisabled)
             }
-            .disabled(isDisabled)
 
             if !destructiveTitle.isEmpty {
                 Button(role: .destructive) {

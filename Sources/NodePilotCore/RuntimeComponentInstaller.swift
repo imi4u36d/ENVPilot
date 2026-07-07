@@ -8,6 +8,9 @@ public protocol RuntimeComponentInstalling: Sendable {
     func listAvailableJavaVersions(ltsOnly: Bool) throws -> [JavaDownloadCandidate]
     func installJava(featureVersion: Int, progress: (@Sendable (String) -> Void)?) throws -> JavaInstallation
     func uninstallManagedJava(homePath: String) throws
+    func listAvailablePythonVersions(stableOnly: Bool) throws -> [PythonDownloadCandidate]
+    func installPython(version: String, progress: (@Sendable (String) -> Void)?) throws -> PythonInstallation
+    func uninstallManagedPython(homePath: String) throws
 }
 
 public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
@@ -156,6 +159,94 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
         try FileManager.default.removeItem(at: bundleURL)
     }
 
+    public func listAvailablePythonVersions(stableOnly: Bool = true) throws -> [PythonDownloadCandidate] {
+        let releases = try pythonFtpReleases().filter { release in
+            release.isSupportedOnModernMac && (!stableOnly || release.isStable)
+        }
+        let latestReleases = latestPythonReleasePerFeature(from: releases)
+        return try latestReleases.compactMap { release in
+            try pythonSourceCandidate(version: release.version)
+        }
+    }
+
+    public func installPython(version: String, progress: (@Sendable (String) -> Void)?) throws -> PythonInstallation {
+        let resolvedVersion = try resolvePythonVersion(version)
+        let candidate = try pythonSourceCandidate(version: resolvedVersion)
+        guard let candidate else {
+            throw RuntimeComponentInstallerError.pythonCandidateNotFound(version)
+        }
+
+        let archiveURL = try Self.url(candidate.downloadURL)
+        let workDirectory = try makeWorkDirectory(prefix: "python-\(resolvedVersion)")
+        defer { try? FileManager.default.removeItem(at: workDirectory) }
+
+        let archiveURLOnDisk = workDirectory.appendingPathComponent(candidate.packageName)
+        progress?("正在下载 Python \(resolvedVersion) 0%")
+        try downloadFile(
+            from: archiveURL,
+            to: archiveURLOnDisk,
+            label: "正在下载 Python \(resolvedVersion)",
+            progress: progress
+        )
+
+        progress?("正在安装 Python \(resolvedVersion)：解压 55%")
+        let extractDirectory = workDirectory.appendingPathComponent("extract", isDirectory: true)
+        try FileManager.default.createDirectory(at: extractDirectory, withIntermediateDirectories: true)
+        try extractArchive(archiveURLOnDisk, to: extractDirectory)
+
+        let sourceDirectory = extractDirectory.appendingPathComponent("Python-\(resolvedVersion)", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: sourceDirectory.appendingPathComponent("configure").path) else {
+            throw RuntimeComponentInstallerError.runtimeArchiveInvalid(message: "Python source archive did not contain configure.")
+        }
+
+        let target = Self.managedPythonRoot().appendingPathComponent(resolvedVersion, isDirectory: true)
+        if FileManager.default.fileExists(atPath: target.path) {
+            try FileManager.default.removeItem(at: target)
+        }
+        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        progress?("正在安装 Python \(resolvedVersion)：配置 65%")
+        try runPythonBuildCommand(
+            "cd \(Self.shellSingleQuoted(sourceDirectory.path)) && ./configure --prefix=\(Self.shellSingleQuoted(target.path)) --enable-shared",
+            stage: "配置 Python \(resolvedVersion)"
+        )
+
+        progress?("正在安装 Python \(resolvedVersion)：编译 75%")
+        try runPythonBuildCommand(
+            "cd \(Self.shellSingleQuoted(sourceDirectory.path)) && /usr/bin/make -j\(Self.processorCount)",
+            stage: "编译 Python \(resolvedVersion)"
+        )
+
+        progress?("正在安装 Python \(resolvedVersion)：写入 95%")
+        try runPythonBuildCommand(
+            "cd \(Self.shellSingleQuoted(sourceDirectory.path)) && /usr/bin/make install",
+            stage: "安装 Python \(resolvedVersion)"
+        )
+
+        guard FileManager.default.isExecutableFile(atPath: target.appendingPathComponent("bin/python3").path) else {
+            throw RuntimeComponentInstallerError.runtimeArchiveInvalid(message: "Python install did not contain bin/python3.")
+        }
+
+        let installedVersion = versionFromPythonHome(target.path) ?? resolvedVersion
+        progress?("Python \(installedVersion) 安装完成 100%")
+        return PythonInstallation(
+            version: installedVersion,
+            homePath: target.path,
+            executablePath: target.appendingPathComponent("bin/python3").path
+        )
+    }
+
+    public func uninstallManagedPython(homePath: String) throws {
+        let homeURL = URL(fileURLWithPath: homePath).standardizedFileURL
+        guard Self.isManagedPythonHomePath(homeURL.path) else {
+            throw RuntimeComponentInstallerError.unmanagedRuntimeRemovalUnsupported(path: homePath)
+        }
+        guard FileManager.default.fileExists(atPath: homeURL.path) else {
+            throw RuntimeComponentInstallerError.runtimeNotInstalled(path: homePath)
+        }
+        try FileManager.default.removeItem(at: homeURL)
+    }
+
     func resolveNodeVersion(_ requestedVersion: String) throws -> String {
         let normalized = normalizeInstallSpec(requestedVersion)
         guard !normalized.isEmpty else {
@@ -225,6 +316,94 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
             downloadURL: package.link,
             checksum: package.checksum
         )
+    }
+
+    func resolvePythonVersion(_ requestedVersion: String) throws -> String {
+        let normalized = normalizeInstallSpec(requestedVersion)
+        guard !normalized.isEmpty else {
+            throw RuntimeComponentInstallerError.invalidPythonVersion(requestedVersion)
+        }
+        if PythonRuntimeDetector.normalizeVersion(normalized) != nil {
+            return normalized
+        }
+
+        let releases = try pythonFtpReleases().filter { $0.isStable && $0.isSupportedOnModernMac }
+        if normalized == "latest" || normalized == "python" || normalized == "python3" {
+            guard let latest = releases.first else {
+                throw RuntimeComponentInstallerError.pythonVersionNotFound(requestedVersion)
+            }
+            return latest.version
+        }
+
+        let requestedParts = normalized.split(separator: ".").compactMap { Int($0) }
+        guard !requestedParts.isEmpty else {
+            throw RuntimeComponentInstallerError.invalidPythonVersion(requestedVersion)
+        }
+        guard let match = releases.first(where: { release in
+            let parts = release.version.split(separator: ".").compactMap { Int($0) }
+            return requestedParts.enumerated().allSatisfy { index, value in
+                index < parts.count && parts[index] == value
+            }
+        }) else {
+            throw RuntimeComponentInstallerError.pythonVersionNotFound(requestedVersion)
+        }
+        return match.version
+    }
+
+    fileprivate func pythonFtpReleases() throws -> [PythonFtpRelease] {
+        let html = try fetchString(from: Self.pythonFtpIndexURL)
+        let pattern = #"href="(\d+\.\d+(?:\.\d+)?(?:[a-z]+\d*)?)/""#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return []
+        }
+        let range = NSRange(html.startIndex..<html.endIndex, in: html)
+        let matches = regex.matches(in: html, range: range)
+        var seen = Set<String>()
+        let releases = matches.compactMap { match -> PythonFtpRelease? in
+            guard let versionRange = Range(match.range(at: 1), in: html) else {
+                return nil
+            }
+            let version = String(html[versionRange])
+            guard seen.insert(version).inserted else {
+                return nil
+            }
+            return PythonFtpRelease(version: version)
+        }
+        return releases.sorted { PythonRuntimeDetector.isPythonVersionGreater($0.version, $1.version) }
+    }
+
+    fileprivate func latestPythonReleasePerFeature(from releases: [PythonFtpRelease]) -> [PythonFtpRelease] {
+        var seenFeatures = Set<String>()
+        var latestReleases: [PythonFtpRelease] = []
+
+        for release in releases {
+            guard let feature = release.featureVersion, seenFeatures.insert(feature).inserted else {
+                continue
+            }
+            latestReleases.append(release)
+        }
+        return latestReleases
+    }
+
+    func pythonSourceCandidate(version: String) throws -> PythonDownloadCandidate? {
+        let baseURL = "https://www.python.org/ftp/python/\(version)"
+        let archiveName = "Python-\(version).tar.xz"
+        let html = try fetchString(from: Self.url("\(baseURL)/"))
+        guard html.contains(archiveName) else {
+            return nil
+        }
+        return PythonDownloadCandidate(
+            version: version,
+            packageName: archiveName,
+            downloadURL: "\(baseURL)/\(archiveName)"
+        )
+    }
+
+    func runPythonBuildCommand(_ command: String, stage: String) throws {
+        let result = try shellRunner.runShell(command, environment: environment)
+        guard result.succeeded else {
+            throw RuntimeComponentInstallerError.runtimeArchiveInvalid(message: "\(stage) failed: \(preferErrorOutput(result))")
+        }
     }
 
     func normalizeInstallSpec(_ version: String) -> String {
@@ -393,6 +572,21 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
         )
     }
 
+    func versionFromPythonHome(_ homePath: String) -> String? {
+        let pythonBinary = (homePath as NSString).appendingPathComponent("bin/python3")
+        let result = try? shellRunner.run(
+            pythonBinary,
+            arguments: ["--version"],
+            environment: environment
+        )
+        guard let result else {
+            return nil
+        }
+        return PythonRuntimeDetector.normalizeVersion(
+            [result.standardOutput, result.standardError].joined(separator: "\n")
+        )
+    }
+
     private func preferErrorOutput(_ result: ShellCommandResult) -> String {
         let stderr = result.standardError.trimmingCharacters(in: .whitespacesAndNewlines)
         if !stderr.isEmpty {
@@ -404,6 +598,7 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
 
     static let nodeDistIndexURL = URL(string: "https://nodejs.org/dist/index.json")!
     static let adoptiumAvailableReleasesURL = URL(string: "https://api.adoptium.net/v3/info/available_releases")!
+    static let pythonFtpIndexURL = URL(string: "https://www.python.org/ftp/python/")!
 
     static var nodeArchiveFileToken: String {
         #if arch(arm64)
@@ -439,12 +634,21 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
             .appendingPathComponent(".envpilot/runtimes/java", isDirectory: true)
     }
 
+    static func managedPythonRoot() -> URL {
+        URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+            .appendingPathComponent(".envpilot/runtimes/python", isDirectory: true)
+    }
+
     static func isManagedNodePath(_ path: String) -> Bool {
         URL(fileURLWithPath: path).standardizedFileURL.path.hasPrefix(managedNodeRoot().path + "/")
     }
 
     static func isManagedJavaHomePath(_ path: String) -> Bool {
         URL(fileURLWithPath: path).standardizedFileURL.path.hasPrefix(managedJavaRoot().path + "/")
+    }
+
+    static func isManagedPythonHomePath(_ path: String) -> Bool {
+        URL(fileURLWithPath: path).standardizedFileURL.path.hasPrefix(managedPythonRoot().path + "/")
     }
 
     static func sanitizePathComponent(_ value: String) -> String {
@@ -467,6 +671,14 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
             throw RuntimeComponentInstallerError.invalidDownloadURL(value)
         }
         return url
+    }
+
+    static func shellSingleQuoted(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\"'\"'"))'"
+    }
+
+    static var processorCount: Int {
+        max(1, ProcessInfo.processInfo.processorCount)
     }
 }
 
@@ -688,6 +900,30 @@ private struct AdoptiumVersion: Decodable {
     }
 }
 
+private struct PythonFtpRelease {
+    let version: String
+
+    var isStable: Bool {
+        PythonRuntimeDetector.normalizeVersion(version) == version
+    }
+
+    var isSupportedOnModernMac: Bool {
+        let parts = version.split(separator: ".").compactMap { Int($0) }
+        guard parts.count >= 2 else {
+            return false
+        }
+        return parts[0] == 3 && parts[1] >= 8
+    }
+
+    var featureVersion: String? {
+        let parts = version.split(separator: ".")
+        guard parts.count >= 2 else {
+            return nil
+        }
+        return "\(parts[0]).\(parts[1])"
+    }
+}
+
 public enum RuntimeComponentInstallerError: Error, LocalizedError {
     case invalidDownloadURL(String)
     case runtimeDownloadFailed(url: String, message: String)
@@ -699,6 +935,9 @@ public enum RuntimeComponentInstallerError: Error, LocalizedError {
     case nodeVersionNotFound(String)
     case invalidJavaFeatureVersion(String)
     case javaCandidateNotFound(String)
+    case invalidPythonVersion(String)
+    case pythonVersionNotFound(String)
+    case pythonCandidateNotFound(String)
 
     public var errorDescription: String? {
         switch self {
@@ -722,6 +961,12 @@ public enum RuntimeComponentInstallerError: Error, LocalizedError {
             return "Invalid JDK feature version: \(version)"
         case .javaCandidateNotFound(let version):
             return "Temurin JDK is not available for this Mac: \(version)"
+        case .invalidPythonVersion(let version):
+            return "Invalid Python version: \(version)"
+        case .pythonVersionNotFound(let version):
+            return "Python version is not available from python.org: \(version)"
+        case .pythonCandidateNotFound(let version):
+            return "Python source package is not available from python.org: \(version)"
         }
     }
 }
