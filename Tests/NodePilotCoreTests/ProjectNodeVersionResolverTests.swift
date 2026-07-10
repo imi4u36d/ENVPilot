@@ -2,6 +2,14 @@ import XCTest
 @testable import ENVPilotCore
 
 final class ProjectNodeVersionResolverTests: XCTestCase {
+    func testResolversStopAtFileSystemRoot() {
+        let root = URL(fileURLWithPath: "/", isDirectory: true)
+
+        XCTAssertNil(ProjectNodeVersionResolver().resolveVersion(startingAt: root))
+        XCTAssertNil(ProjectJavaVersionResolver().resolveVersion(startingAt: root))
+        XCTAssertNil(ProjectPythonVersionResolver().resolveVersion(startingAt: root))
+    }
+
     func testResolveVersionReturnsNilWhenProjectFilesAreMissing() throws {
         let resolver = ProjectNodeVersionResolver()
         let url = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)

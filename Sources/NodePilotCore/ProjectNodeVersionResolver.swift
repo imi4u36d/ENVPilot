@@ -10,19 +10,7 @@ public struct ProjectNodeVersionResolver {
     }
 
     public func resolveVersion(startingAt directory: URL) -> String? {
-        var currentURL = directory.standardizedFileURL
-
-        while true {
-            if let version = version(in: currentURL) {
-                return version
-            }
-
-            let parentURL = currentURL.deletingLastPathComponent()
-            if parentURL.path == currentURL.path {
-                return nil
-            }
-            currentURL = parentURL
-        }
+        resolveProjectVersion(startingAt: directory, valueInDirectory: version(in:))
     }
 
     private func version(in directory: URL) -> String? {
@@ -40,19 +28,7 @@ public struct ProjectJavaVersionResolver {
     }
 
     public func resolveVersion(startingAt directory: URL) -> String? {
-        var currentURL = directory.standardizedFileURL
-
-        while true {
-            if let version = version(in: currentURL) {
-                return version
-            }
-
-            let parentURL = currentURL.deletingLastPathComponent()
-            if parentURL.path == currentURL.path {
-                return nil
-            }
-            currentURL = parentURL
-        }
+        resolveProjectVersion(startingAt: directory, valueInDirectory: version(in:))
     }
 
     private func version(in directory: URL) -> String? {
@@ -70,24 +46,33 @@ public struct ProjectPythonVersionResolver {
     }
 
     public func resolveVersion(startingAt directory: URL) -> String? {
-        var currentURL = directory.standardizedFileURL
-
-        while true {
-            if let version = version(in: currentURL) {
-                return version
-            }
-
-            let parentURL = currentURL.deletingLastPathComponent()
-            if parentURL.path == currentURL.path {
-                return nil
-            }
-            currentURL = parentURL
-        }
+        resolveProjectVersion(startingAt: directory, valueInDirectory: version(in:))
     }
 
     private func version(in directory: URL) -> String? {
         envPilotParser.value(for: "PYTHON_VERSION", in: directory)
     }
+}
+
+private func resolveProjectVersion(
+    startingAt directory: URL,
+    valueInDirectory: (URL) -> String?
+) -> String? {
+    var currentURL = directory.standardizedFileURL
+    var visitedPaths = Set<String>()
+
+    while visitedPaths.insert(currentURL.path).inserted {
+        if let version = valueInDirectory(currentURL) {
+            return version
+        }
+
+        guard currentURL.pathComponents.count > 1 else {
+            return nil
+        }
+        currentURL = currentURL.deletingLastPathComponent().standardizedFileURL
+    }
+
+    return nil
 }
 
 private struct ProjectEnvPilotFileParser {
