@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import ENVPilotCore
 
 struct MenuBarContentView: View {
@@ -12,21 +13,21 @@ struct MenuBarContentView: View {
                 menuHeader
                 Divider()
                 runtimeSummary
+                Divider()
                 if store.isLoading {
-                    Divider()
                     ProgressRow(message: store.loadingMessage ?? "正在处理...")
+                    Divider()
                 }
                 if let message = store.latestError {
-                    Divider()
                     MessageRow(message: message, systemImage: "exclamationmark.triangle.fill", color: .red)
+                    Divider()
                 }
-                Divider()
                 quickActions
                 Divider()
                 footerActions
             }
             .frame(width: 360)
-            .liquidGlassPanel(cornerRadius: 18, tint: Color.white.opacity(0.04))
+            .liquidGlassPanel(cornerRadius: 14, tint: Color.clear)
             .padding(10)
         }
         .frame(width: 380)
@@ -35,14 +36,14 @@ struct MenuBarContentView: View {
     private var menuHeader: some View {
         HStack(spacing: 10) {
             Image(systemName: "terminal.fill")
-                .font(.title3)
+                .font(.title3.weight(.semibold))
                 .foregroundStyle(Color.accentColor)
                 .frame(width: 28, height: 28)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("ENVPilot")
                     .font(.headline)
-                Text(store.isLoading ? "正在同步运行时" : "开发运行时已就绪")
+                Text(store.isLoading ? "正在同步运行时" : "开发环境已就绪")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -53,32 +54,34 @@ struct MenuBarContentView: View {
                 Task { await store.refresh() }
             } label: {
                 Image(systemName: "arrow.clockwise")
+                    .frame(width: 28, height: 28)
             }
             .buttonStyle(.borderless)
-            .help("刷新")
+            .accessibilityLabel("刷新运行时信息")
+            .help("刷新运行时信息")
             .disabled(store.isLoading)
         }
         .padding(12)
     }
 
     private var runtimeSummary: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             RuntimeMenuRow(
                 title: "Node",
                 value: store.displayNodeVersion,
-                detail: store.snapshot?.activeNodePath ?? "未检测到 node 命令",
+                detail: store.displayNodePath,
                 systemImage: "shippingbox"
             )
             RuntimeMenuRow(
                 title: "JDK",
                 value: store.displayJavaVersion,
-                detail: store.snapshot?.activeJavaHome ?? "未配置 JAVA_HOME",
+                detail: store.snapshot?.settings.selectedJavaHome ?? store.snapshot?.activeJavaHome ?? "未配置 JAVA_HOME",
                 systemImage: "cup.and.saucer"
             )
             RuntimeMenuRow(
                 title: "Python",
                 value: store.displayPythonVersion,
-                detail: store.snapshot?.activePythonHome ?? "未配置 Python",
+                detail: store.snapshot?.settings.selectedPythonHome ?? store.snapshot?.activePythonHome ?? "未配置 Python",
                 systemImage: "curlybraces"
             )
         }
@@ -107,7 +110,7 @@ struct MenuBarContentView: View {
                     emptyTitle: "未发现 JDK",
                     items: Array(snapshot.javaInstallations.prefix(5)),
                     isSelected: { snapshot.settings.selectedJavaHome == $0.homePath },
-                    version: { $0.version },
+                    version: { RuntimeDisplayFormatter.javaVersion($0.version) },
                     path: { $0.homePath },
                     action: { item in Task { await store.setDefaultJava(version: item.version, homePath: item.homePath) } }
                 )
@@ -155,6 +158,11 @@ struct MenuBarContentView: View {
 }
 
 struct SettingsView: View {
+    private enum PendingProfileNavigation {
+        case profile(UUID?)
+        case section(SettingsSection?)
+    }
+
     @ObservedObject var store: NodeRuntimeStore
 
     @State private var selectedSection: SettingsSection? = .overview
@@ -169,68 +177,194 @@ struct SettingsView: View {
     @State private var pythonCandidatesStableOnly = true
     @State private var projectPreference: ProjectVersionPreference = .followProjectFiles
     @State private var isSynchronizing = false
+    @State private var pendingUninstallRequest: RuntimeUninstallRequest?
+    @State private var pendingProfileNavigation: PendingProfileNavigation?
+    @State private var isEnvironmentDetailsExpanded = false
 
     var body: some View {
-        NavigationSplitView {
-            List(SettingsSection.allCases, selection: $selectedSection) { section in
-                Label(section.title, systemImage: section.systemImage)
-                    .tag(section)
+        settingsRoot
+            .groupBoxStyle(LiquidGlassGroupBoxStyle())
+            .task {
+                synchronizeFromSnapshot()
             }
-            .navigationTitle("ENVPilot")
-            .scrollContentBackground(.hidden)
-            .navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 220)
-        } detail: {
-            ZStack {
-                LiquidGlassBackground()
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        SettingsDetailHeader(
-                            section: selectedSection ?? .overview,
-                            isLoading: store.isLoading,
-                            refreshAction: { Task { await store.refresh() } }
-                        )
-
-                        if let message = store.latestError {
-                            InlineMessage(message: message, systemImage: "exclamationmark.triangle.fill", color: .red)
-                        }
-                        detailContent
+            .onChange(of: store.snapshot?.settings.selectedProfileID) { _ in
+                synchronizeFromSnapshot()
+            }
+            .onChange(of: store.snapshot?.settings.projectVersionPreference) { _ in
+                synchronizeFromSnapshot()
+            }
+            .onChange(of: store.snapshot?.settings.profiles ?? []) { _ in
+                synchronizeFromSnapshot()
+            }
+            .onChange(of: projectPreference) { newValue in
+                guard !isSynchronizing else {
+                    return
+                }
+                Task { await store.setProjectVersionPreference(newValue) }
+            }
+            .confirmationDialog(
+                pendingUninstallRequest?.isCurrent == true ? "无法卸载当前使用版本" : "确认卸载运行时？",
+                isPresented: uninstallConfirmationBinding,
+                titleVisibility: .visible,
+                presenting: pendingUninstallRequest
+            ) { request in
+                if request.isCurrent {
+                    Button("知道了", role: .cancel) {}
+                } else {
+                    Button("卸载 \(request.displayName)", role: .destructive) {
+                        performUninstall(request)
                     }
-                    .padding(24)
-                    .frame(maxWidth: 900, alignment: .leading)
+                    Button("取消", role: .cancel) {}
+                }
+            } message: { request in
+                if request.isCurrent {
+                    Text("\(request.displayName) 正在使用。请先切换到其他版本，再执行卸载。")
+                } else {
+                    Text("将从本机移除 \(request.displayName)。路径：\(request.path)。此操作无法撤销。")
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .navigationTitle("")
-        }
-        .groupBoxStyle(LiquidGlassGroupBoxStyle())
-        .task {
-            synchronizeFromSnapshot()
-        }
-        .onChange(of: store.snapshot?.settings.selectedProfileID) { _ in
-            synchronizeFromSnapshot()
-        }
-        .onChange(of: store.snapshot?.settings.projectVersionPreference) { _ in
-            synchronizeFromSnapshot()
-        }
-        .onChange(of: store.snapshot?.settings.profiles.map(\.id) ?? []) { _ in
-            synchronizeFromSnapshot()
-        }
-        .onChange(of: selectedProfileID) { newValue in
-            guard !isSynchronizing, let newValue else {
-                return
+            .confirmationDialog(
+                "有未保存的环境预设更改",
+                isPresented: pendingProfileNavigationBinding,
+                titleVisibility: .visible
+            ) {
+                Button("保存并继续") {
+                    saveProfileAndContinue()
+                }
+                .disabled(profileValidationMessage != nil)
+                Button("放弃更改", role: .destructive) {
+                    discardProfileChangesAndContinue()
+                }
+                Button("取消", role: .cancel) {
+                    pendingProfileNavigation = nil
+                }
+            } message: {
+                Text("离开当前环境预设前，请保存或放弃更改。")
             }
-            if let selected = profiles.first(where: { $0.id == newValue }) {
-                draftProfile = selected
+    }
+
+    private var settingsRoot: some View {
+        HStack(spacing: 0) {
+            sidebar
+                .frame(width: 220)
+
+            Divider()
+
+            ZStack {
+                LiquidGlassBackground()
+                detailPanel
             }
-            Task { await store.setSelectedProfile(id: newValue) }
         }
-        .onChange(of: projectPreference) { newValue in
-            guard !isSynchronizing else {
-                return
+    }
+
+    private var sidebar: some View {
+        ZStack {
+            AppPalette.sidebarBackground
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                HStack(spacing: 11) {
+                    Image(systemName: "terminal.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(Color.accentColor.gradient, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("ENVPilot")
+                            .font(.headline)
+                        Text("开发环境管理")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 18)
+                .padding(.bottom, 14)
+
+                sidebarList
+
+                sidebarFooter
             }
-            Task { await store.setProjectVersionPreference(newValue) }
         }
+    }
+
+    private var sidebarList: some View {
+        List(selection: sectionSelectionBinding) {
+            Section("运行时") {
+                sidebarItem(.overview)
+                sidebarItem(.node)
+                sidebarItem(.jdk)
+                sidebarItem(.python)
+            }
+
+            Section("项目与环境") {
+                sidebarItem(.project)
+                sidebarItem(.profiles)
+            }
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+    }
+
+    private func sidebarItem(_ section: SettingsSection) -> some View {
+        Label(section.title, systemImage: section.systemImage)
+            .tag(section)
+    }
+
+    private var sidebarFooter: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(store.isLoading ? Color.orange : Color.green)
+                    .frame(width: 7, height: 7)
+                    .shadow(color: (store.isLoading ? Color.orange : Color.green).opacity(0.45), radius: 3)
+                Text(store.isLoading ? (store.loadingMessage ?? "正在同步") : "环境状态已同步")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            HStack(spacing: 6) {
+                Image(systemName: "person.crop.circle")
+                    .foregroundStyle(.secondary)
+                Text(currentProfileName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+    }
+
+    private var detailPanel: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                SettingsDetailHeader(
+                    section: selectedSection ?? .overview,
+                    isLoading: store.isLoading,
+                    refreshAction: { Task { await store.refresh() } }
+                )
+
+                if let message = store.latestError {
+                    InlineMessage(message: message, systemImage: "exclamationmark.triangle.fill", color: .red)
+                }
+                if let message = store.latestNotice {
+                    InlineMessage(message: message, systemImage: "checkmark.circle.fill", color: .green)
+                }
+                detailContent
+            }
+            .frame(maxWidth: 1080, alignment: .leading)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 28)
+            .frame(maxWidth: .infinity, alignment: .top)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
@@ -255,77 +389,150 @@ struct SettingsView: View {
         store.snapshot?.settings.profiles ?? []
     }
 
-    private var configuredNodeOverviewStatus: String {
+    private var configuredNodeOverviewStatus: StatusBadgeModel {
         guard store.snapshot?.settings.selectedVersion != nil else {
-            return "未配置"
+            let hasInstallations = store.snapshot?.installations.isEmpty == false
+            return StatusBadgeModel(
+                text: hasInstallations ? "尚未选择" : "尚未安装",
+                systemImage: hasInstallations ? "circle.dashed" : "square.and.arrow.down",
+                color: .orange
+            )
         }
-        return store.configuredNodeInstallation == nil ? "未下载" : "已下载"
+        if store.configuredNodeInstallation != nil {
+            return StatusBadgeModel(text: "当前使用", systemImage: "checkmark.circle.fill", color: .green)
+        }
+        return StatusBadgeModel(text: "配置缺失", systemImage: "exclamationmark.triangle.fill", color: .red)
     }
 
-    private var configuredJavaOverviewStatus: String {
+    private var configuredJavaOverviewStatus: StatusBadgeModel {
         guard let selectedJavaHome = store.snapshot?.settings.selectedJavaHome, !selectedJavaHome.isEmpty else {
-            return "未配置"
+            let hasInstallations = store.snapshot?.javaInstallations.isEmpty == false
+            return StatusBadgeModel(
+                text: hasInstallations ? "尚未选择" : "尚未安装",
+                systemImage: hasInstallations ? "circle.dashed" : "square.and.arrow.down",
+                color: .orange
+            )
         }
         let isInstalled = store.snapshot?.javaInstallations.contains { $0.homePath == selectedJavaHome } == true
-        return isInstalled ? "已下载" : "未下载"
+        return isInstalled
+            ? StatusBadgeModel(text: "当前使用", systemImage: "checkmark.circle.fill", color: .green)
+            : StatusBadgeModel(text: "配置缺失", systemImage: "exclamationmark.triangle.fill", color: .red)
     }
 
-    private var configuredPythonOverviewStatus: String {
+    private var configuredPythonOverviewStatus: StatusBadgeModel {
         guard let selectedPythonHome = store.snapshot?.settings.selectedPythonHome, !selectedPythonHome.isEmpty else {
-            return "未配置"
+            let hasInstallations = store.snapshot?.pythonInstallations.isEmpty == false
+            return StatusBadgeModel(
+                text: hasInstallations ? "尚未选择" : "尚未安装",
+                systemImage: hasInstallations ? "circle.dashed" : "square.and.arrow.down",
+                color: .orange
+            )
         }
         let isInstalled = store.snapshot?.pythonInstallations.contains { $0.homePath == selectedPythonHome } == true
-        return isInstalled ? "已下载" : "未下载"
+        return isInstalled
+            ? StatusBadgeModel(text: "当前使用", systemImage: "checkmark.circle.fill", color: .green)
+            : StatusBadgeModel(text: "配置缺失", systemImage: "exclamationmark.triangle.fill", color: .red)
+    }
+
+    private var nodeOverviewActionTitle: String {
+        if store.configuredNodeInstallation != nil {
+            return "管理版本"
+        }
+        return store.snapshot?.installations.isEmpty == false ? "选择版本" : "安装 Node"
+    }
+
+    private var javaOverviewActionTitle: String {
+        let selectedHome = store.snapshot?.settings.selectedJavaHome
+        let isSelectedInstalled = store.snapshot?.javaInstallations.contains { $0.homePath == selectedHome } == true
+        if isSelectedInstalled {
+            return "管理版本"
+        }
+        return store.snapshot?.javaInstallations.isEmpty == false ? "选择版本" : "安装 JDK"
+    }
+
+    private var pythonOverviewActionTitle: String {
+        let selectedHome = store.snapshot?.settings.selectedPythonHome
+        let isSelectedInstalled = store.snapshot?.pythonInstallations.contains { $0.homePath == selectedHome } == true
+        if isSelectedInstalled {
+            return "管理版本"
+        }
+        return store.snapshot?.pythonInstallations.isEmpty == false ? "选择版本" : "安装 Python"
     }
 
     private var overviewSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            GroupBox {
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack(alignment: .firstTextBaseline) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("运行时概览")
-                                .font(.title2.weight(.semibold))
-                            Text("查看 ENVPilot 已选运行时与终端激活后的生效路径。")
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        StatusBadge(text: store.configuredNodeStatus, systemImage: "checkmark.circle.fill", color: .blue)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
+                RuntimeOverviewCard(
+                    title: "Node.js",
+                    version: store.configuredNodeVersion,
+                    status: configuredNodeOverviewStatus,
+                    path: store.configuredNodeInstallation?.installPath ?? "尚未选择运行时",
+                    systemImage: "shippingbox.fill",
+                    color: .green,
+                    actionTitle: nodeOverviewActionTitle,
+                    action: { selectedSection = .node }
+                )
+                RuntimeOverviewCard(
+                    title: "Java",
+                    version: RuntimeDisplayFormatter.javaVersion(store.snapshot?.settings.selectedJavaVersion),
+                    status: configuredJavaOverviewStatus,
+                    path: store.snapshot?.settings.selectedJavaHome ?? "尚未选择运行时",
+                    systemImage: "cup.and.saucer.fill",
+                    color: .orange,
+                    actionTitle: javaOverviewActionTitle,
+                    action: { selectedSection = .jdk }
+                )
+                RuntimeOverviewCard(
+                    title: "Python",
+                    version: store.snapshot?.settings.selectedPythonVersion ?? "--",
+                    status: configuredPythonOverviewStatus,
+                    path: store.snapshot?.settings.selectedPythonHome ?? "尚未选择运行时",
+                    systemImage: "chevron.left.forwardslash.chevron.right",
+                    color: .blue,
+                    actionTitle: pythonOverviewActionTitle,
+                    action: { selectedSection = .python }
+                )
+            }
+
+            GroupBox("环境解析结果") {
+                VStack(alignment: .leading, spacing: 10) {
+                    LabeledContent("版本来源") {
+                        Text(projectPreferenceText(store.snapshot?.settings.projectVersionPreference ?? .followProjectFiles))
                     }
-
-                    LazyVGrid(
-                        columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
-                        spacing: 12
-                    ) {
-                        MetricTile(title: "Node 已选版本", value: store.configuredNodeVersion, systemImage: "shippingbox")
-                        MetricTile(title: "Node 状态", value: configuredNodeOverviewStatus, systemImage: "terminal")
-                        MetricTile(title: "JDK 已选版本", value: store.snapshot?.settings.selectedJavaVersion ?? "--", systemImage: "cup.and.saucer")
-                        MetricTile(title: "JDK 状态", value: configuredJavaOverviewStatus, systemImage: "terminal")
-                        MetricTile(title: "Python 已选版本", value: store.snapshot?.settings.selectedPythonVersion ?? "--", systemImage: "curlybraces")
-                        MetricTile(title: "Python 状态", value: configuredPythonOverviewStatus, systemImage: "terminal")
+                    LabeledContent("Node 请求版本") {
+                        Text(store.configuredNodeVersion)
+                            .font(.body.monospacedDigit())
                     }
-
-                    Divider()
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        PathRow(title: "Node 安装目录（已选）", value: store.configuredNodeInstallation?.installPath ?? "未选择")
-                        PathRow(title: "ENVPilot node 可执行文件", value: store.configuredNodeInstallation?.executablePath ?? "未选择")
-                        PathRow(title: "JAVA_HOME（已选）", value: store.snapshot?.settings.selectedJavaHome ?? "未选择")
-                        PathRow(title: "PYTHON_HOME（已选）", value: store.snapshot?.settings.selectedPythonHome ?? "未选择")
+                    LabeledContent("环境预设") {
+                        Text(currentProfileName)
+                    }
+                    LabeledContent("生效范围") {
+                        Text("新打开的终端会读取 ENVPilot 环境变量")
                     }
                 }
             }
 
-            GroupBox("当前环境配置") {
-                VStack(alignment: .leading, spacing: 10) {
-                    LabeledContent("配置") {
-                        Text(currentProfileName)
+            GroupBox {
+                DisclosureGroup(isExpanded: $isEnvironmentDetailsExpanded) {
+                    VStack(alignment: .leading, spacing: 11) {
+                        Divider()
+                        PathRow(title: "Node 安装目录", value: store.configuredNodeInstallation?.installPath ?? "未选择")
+                        Divider()
+                        PathRow(title: "Node 可执行文件", value: store.configuredNodeInstallation?.executablePath ?? "未选择")
+                        Divider()
+                        PathRow(title: "JAVA_HOME", value: store.snapshot?.settings.selectedJavaHome ?? "未选择")
+                        Divider()
+                        PathRow(title: "PYTHON_HOME", value: store.snapshot?.settings.selectedPythonHome ?? "未选择")
                     }
-                    LabeledContent("Node 版本来源") {
-                        Text(projectPreferenceText(store.snapshot?.settings.projectVersionPreference ?? .followProjectFiles))
-                    }
-                    LabeledContent("切换方式") {
-                        Text("ENVPilot 环境变量")
+                    .padding(.top, 8)
+                } label: {
+                    HStack {
+                        Label("环境详情", systemImage: "terminal")
+                            .font(.headline)
+                        Spacer()
+                        Text("复制或在 Finder 中定位运行时路径")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -333,16 +540,8 @@ struct SettingsView: View {
     }
 
     private var nodeSection: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 16) {
-                SectionHeader(
-                    title: "Node",
-                    subtitle: "从 Node 官方分发安装到 ENVPilot 目录，并通过环境变量切换 PATH。",
-                    systemImage: "shippingbox"
-                )
-
-                installNodePanel
-
+        VStack(alignment: .leading, spacing: 16) {
+            GroupBox("已安装 Node") {
                 if let installations = store.snapshot?.installations, !installations.isEmpty {
                     VStack(spacing: 8) {
                         ForEach(installations) { item in
@@ -354,10 +553,14 @@ struct SettingsView: View {
                                 badges: nodeBadges(for: item),
                                 primaryTitle: isSelected ? "" : "切换",
                                 primarySystemImage: "arrow.triangle.2.circlepath",
-                                primaryStatusBadge: isSelected ? StatusBadgeModel(text: "已选中", systemImage: "checkmark.circle.fill", color: .green) : nil,
+                                primaryStatusBadge: isSelected ? StatusBadgeModel(text: "当前使用", systemImage: "checkmark.circle.fill", color: .green) : nil,
                                 destructiveTitle: canUninstall ? "卸载" : "",
                                 primaryAction: { Task { await store.setDefaultNode(version: item.version) } },
-                                destructiveAction: { Task { await store.uninstallNode(version: item.version) } },
+                                destructiveAction: {
+                                    pendingUninstallRequest = RuntimeUninstallRequest(
+                                        target: .node(version: item.version, path: item.installPath, isCurrent: isSelected)
+                                    )
+                                },
                                 isDisabled: store.isLoading
                             )
                         }
@@ -370,22 +573,23 @@ struct SettingsView: View {
                     )
                 }
             }
+
+            GroupBox {
+                VStack(alignment: .leading, spacing: 16) {
+                    SectionHeader(
+                        title: "获取与安装 Node",
+                        subtitle: "从 Node 官方分发获取版本，并安装到 ENVPilot 管理目录。",
+                        systemImage: "square.and.arrow.down"
+                    )
+
+                    installNodePanel
+                }
+            }
         }
     }
 
     private var jdkSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            GroupBox {
-                VStack(alignment: .leading, spacing: 16) {
-                    SectionHeader(
-                        title: "JDK",
-                        subtitle: "从 Adoptium Temurin 安装到 ENVPilot 目录，并写入 JAVA_HOME 与 PATH。",
-                        systemImage: "cup.and.saucer"
-                    )
-                    installJavaPanel
-                }
-            }
-
             GroupBox("已安装 JDK") {
                 if let javaInstallations = store.snapshot?.javaInstallations, !javaInstallations.isEmpty {
                     VStack(spacing: 8) {
@@ -393,15 +597,19 @@ struct SettingsView: View {
                             let canUninstall = isManagedJavaPath(jdk.homePath)
                             let isSelected = store.snapshot?.settings.selectedJavaHome == jdk.homePath
                             RuntimeListRow(
-                                title: "JDK \(jdk.version)",
+                                title: "JDK \(RuntimeDisplayFormatter.javaVersion(jdk.version))",
                                 path: jdk.homePath,
                                 badges: javaBadges(for: jdk),
                                 primaryTitle: isSelected ? "" : "切换",
                                 primarySystemImage: "arrow.triangle.2.circlepath",
-                                primaryStatusBadge: isSelected ? StatusBadgeModel(text: "已选中", systemImage: "checkmark.circle.fill", color: .green) : nil,
+                                primaryStatusBadge: isSelected ? StatusBadgeModel(text: "当前使用", systemImage: "checkmark.circle.fill", color: .green) : nil,
                                 destructiveTitle: canUninstall ? "卸载" : "",
                                 primaryAction: { Task { await store.setDefaultJava(version: jdk.version, homePath: jdk.homePath) } },
-                                destructiveAction: { Task { await store.uninstallJava(version: jdk.version, homePath: jdk.homePath) } },
+                                destructiveAction: {
+                                    pendingUninstallRequest = RuntimeUninstallRequest(
+                                        target: .java(version: jdk.version, path: jdk.homePath, isCurrent: isSelected)
+                                    )
+                                },
                                 isDisabled: store.isLoading
                             )
                         }
@@ -409,9 +617,20 @@ struct SettingsView: View {
                 } else {
                     EmptyState(
                         title: "未发现 ENVPilot JDK",
-                        message: "可以在上方查询 Temurin 候选版本并安装到 ENVPilot 目录。",
+                        message: "可以在上方获取 JDK 候选版本并安装到 ENVPilot 目录。",
                         systemImage: "cup.and.saucer"
                     )
+                }
+            }
+
+            GroupBox {
+                VStack(alignment: .leading, spacing: 16) {
+                    SectionHeader(
+                        title: "获取与安装 JDK",
+                        subtitle: "从可用供应商获取 JDK，并安装到 ENVPilot 管理目录。",
+                        systemImage: "square.and.arrow.down"
+                    )
+                    installJavaPanel
                 }
             }
         }
@@ -419,17 +638,6 @@ struct SettingsView: View {
 
     private var pythonSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            GroupBox {
-                VStack(alignment: .leading, spacing: 16) {
-                    SectionHeader(
-                        title: "Python",
-                        subtitle: "从 Python 官方源码构建到 ENVPilot 目录，并通过 PATH 切换 python3。",
-                        systemImage: "curlybraces"
-                    )
-                    installPythonPanel
-                }
-            }
-
             GroupBox("已安装 Python") {
                 if let pythonInstallations = store.snapshot?.pythonInstallations, !pythonInstallations.isEmpty {
                     VStack(spacing: 8) {
@@ -441,10 +649,14 @@ struct SettingsView: View {
                                 badges: pythonBadges(for: python),
                                 primaryTitle: isSelected ? "" : "切换",
                                 primarySystemImage: "arrow.triangle.2.circlepath",
-                                primaryStatusBadge: isSelected ? StatusBadgeModel(text: "已选中", systemImage: "checkmark.circle.fill", color: .green) : nil,
+                                primaryStatusBadge: isSelected ? StatusBadgeModel(text: "当前使用", systemImage: "checkmark.circle.fill", color: .green) : nil,
                                 destructiveTitle: isManagedPythonPath(python.homePath) ? "卸载" : "",
                                 primaryAction: { Task { await store.setDefaultPython(version: python.version, homePath: python.homePath) } },
-                                destructiveAction: { Task { await store.uninstallPython(version: python.version, homePath: python.homePath) } },
+                                destructiveAction: {
+                                    pendingUninstallRequest = RuntimeUninstallRequest(
+                                        target: .python(version: python.version, path: python.homePath, isCurrent: isSelected)
+                                    )
+                                },
                                 isDisabled: store.isLoading
                             )
                         }
@@ -452,9 +664,20 @@ struct SettingsView: View {
                 } else {
                     EmptyState(
                         title: "未发现 ENVPilot Python",
-                        message: "可以在上方查询 Python 官方候选版本并安装到 ENVPilot 目录。",
+                        message: "可以在上方获取 Python 官方候选版本并安装到 ENVPilot 目录。",
                         systemImage: "curlybraces"
                     )
+                }
+            }
+
+            GroupBox {
+                VStack(alignment: .leading, spacing: 16) {
+                    SectionHeader(
+                        title: "获取与安装 Python",
+                        subtitle: "从 Python 官方源码构建并安装到 ENVPilot 管理目录。",
+                        systemImage: "square.and.arrow.down"
+                    )
+                    installPythonPanel
                 }
             }
         }
@@ -464,7 +687,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .bottom, spacing: 12) {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text("搜索 Node 版本")
+                    Text("筛选 Node 版本")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.primary)
                     TextField("过滤版本，例如 22、20 或 LTS 名称", text: $nodeCandidateSearchText)
@@ -477,21 +700,16 @@ struct SettingsView: View {
                 Button {
                     Task { await store.queryNodeDownloadCandidates(ltsOnly: nodeCandidatesLTSOnly) }
                 } label: {
-                    Label("查询", systemImage: "arrow.clockwise")
+                    Label("获取版本", systemImage: "arrow.clockwise")
                 }
                 .controlSize(.large)
                 .buttonStyle(.borderedProminent)
                 .disabled(store.isLoading)
             }
-            .padding(14)
-            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(AppPalette.borderStrong, lineWidth: 1)
-            }
+            .settingsControlGroup()
 
             if store.nodeDownloadCandidates.isEmpty {
-                InlineMessage(message: "点击查询后展示 Node 官方可下载版本。", systemImage: "info.circle", color: .blue)
+                InlineMessage(message: "点击“获取版本”后展示 Node 官方可安装版本；输入框用于筛选结果。", systemImage: "info.circle", color: .blue)
             } else {
                 VStack(spacing: 8) {
                     ForEach(filteredNodeDownloadCandidates.prefix(12)) { candidate in
@@ -501,8 +719,8 @@ struct SettingsView: View {
                             title: "Node \(candidate.version)",
                             subtitle: candidate.lts.map { "LTS \($0)" } ?? "Current",
                             badges: nodeCandidateBadges(candidate, isInstalled: isInstalled),
-                            progressMessage: isInstalling ? store.installingCandidateMessage : nil,
-                            actionTitle: isInstalled ? "已下载" : (isInstalling ? "安装中" : "安装"),
+                            installationProgress: isInstalling ? store.installationProgress : nil,
+                            actionTitle: isInstalled ? "已安装" : (isInstalling ? "安装中" : "安装"),
                             actionSystemImage: isInstalled ? "checkmark.circle" : (isInstalling ? "hourglass" : "square.and.arrow.down"),
                             action: { Task { await store.installNode(version: candidate.version) } },
                             isDisabled: store.isLoading || isInstalled
@@ -517,10 +735,10 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .bottom, spacing: 12) {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text("搜索 JDK 版本")
+                    Text("筛选 JDK 版本")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.primary)
-                    TextField("过滤版本，例如 21、17 或 Temurin", text: $javaCandidateSearchText)
+                    TextField("过滤版本，例如 21、17、Temurin 或 Zulu", text: $javaCandidateSearchText)
                         .textFieldStyle(EnvPilotTextFieldStyle())
                         .disabled(store.isLoading)
                 }
@@ -530,21 +748,16 @@ struct SettingsView: View {
                 Button {
                     Task { await store.queryJavaDownloadCandidates(ltsOnly: javaCandidatesLTSOnly) }
                 } label: {
-                    Label("查询", systemImage: "arrow.clockwise")
+                    Label("获取版本", systemImage: "arrow.clockwise")
                 }
                 .controlSize(.large)
                 .buttonStyle(.borderedProminent)
                 .disabled(store.isLoading)
             }
-            .padding(14)
-            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(AppPalette.borderStrong, lineWidth: 1)
-            }
+            .settingsControlGroup()
 
             if store.javaDownloadCandidates.isEmpty {
-                InlineMessage(message: "点击查询后展示 Temurin JDK 可下载版本。", systemImage: "info.circle", color: .blue)
+                InlineMessage(message: "点击“获取版本”后展示 JDK 可安装版本；输入框用于筛选结果。", systemImage: "info.circle", color: .blue)
             } else {
                 VStack(spacing: 8) {
                     ForEach(filteredJavaDownloadCandidates.prefix(12)) { candidate in
@@ -554,8 +767,8 @@ struct SettingsView: View {
                             title: "JDK \(candidate.featureVersion)",
                             subtitle: "\(candidate.vendor) \(candidate.version)",
                             badges: javaCandidateBadges(candidate, isInstalled: isInstalled),
-                            progressMessage: isInstalling ? store.installingCandidateMessage : nil,
-                            actionTitle: isInstalled ? "已下载" : (isInstalling ? "安装中" : "安装"),
+                            installationProgress: isInstalling ? store.installationProgress : nil,
+                            actionTitle: isInstalled ? "已安装" : (isInstalling ? "安装中" : "安装"),
                             actionSystemImage: isInstalled ? "checkmark.circle" : (isInstalling ? "hourglass" : "square.and.arrow.down"),
                             action: { Task { await store.installJava(featureVersion: candidate.featureVersion) } },
                             isDisabled: store.isLoading || isInstalled
@@ -570,7 +783,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .bottom, spacing: 12) {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text("搜索 Python 版本")
+                    Text("筛选 Python 版本")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.primary)
                     TextField("过滤版本，例如 3.14、3.13 或 3.12", text: $pythonCandidateSearchText)
@@ -583,21 +796,16 @@ struct SettingsView: View {
                 Button {
                     Task { await store.queryPythonDownloadCandidates(stableOnly: pythonCandidatesStableOnly) }
                 } label: {
-                    Label("查询", systemImage: "arrow.clockwise")
+                    Label("获取版本", systemImage: "arrow.clockwise")
                 }
                 .controlSize(.large)
                 .buttonStyle(.borderedProminent)
                 .disabled(store.isLoading)
             }
-            .padding(14)
-            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(AppPalette.borderStrong, lineWidth: 1)
-            }
+            .settingsControlGroup()
 
             if store.pythonDownloadCandidates.isEmpty {
-                InlineMessage(message: "点击查询后展示 Python 官方可下载源码版本；安装会在本机编译，耗时会比 Node/JDK 更长。", systemImage: "info.circle", color: .blue)
+                InlineMessage(message: "点击“获取版本”后展示 Python 官方源码版本；安装会在本机编译，耗时会比 Node/JDK 更长。", systemImage: "info.circle", color: .blue)
             } else {
                 VStack(spacing: 8) {
                     ForEach(filteredPythonDownloadCandidates.prefix(12)) { candidate in
@@ -607,8 +815,8 @@ struct SettingsView: View {
                             title: "Python \(candidate.version)",
                             subtitle: "CPython source · \(candidate.packageName)",
                             badges: pythonCandidateBadges(candidate, isInstalled: isInstalled),
-                            progressMessage: isInstalling ? store.installingCandidateMessage : nil,
-                            actionTitle: isInstalled ? "已下载" : (isInstalling ? "安装中" : "安装"),
+                            installationProgress: isInstalling ? store.installationProgress : nil,
+                            actionTitle: isInstalled ? "已安装" : (isInstalling ? "安装中" : "安装"),
                             actionSystemImage: isInstalled ? "checkmark.circle" : (isInstalling ? "hourglass" : "square.and.arrow.down"),
                             action: { Task { await store.installPython(version: candidate.version) } },
                             isDisabled: store.isLoading || isInstalled
@@ -623,8 +831,8 @@ struct SettingsView: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 16) {
                 SectionHeader(
-                    title: "项目版本策略",
-                    subtitle: "控制进入项目目录时 Node 版本选择优先级。",
+                    title: "版本来源",
+                    subtitle: "控制进入项目目录时的运行时版本选择规则。",
                     systemImage: "folder.badge.gearshape"
                 )
 
@@ -646,161 +854,19 @@ struct SettingsView: View {
     }
 
     private var profilesSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            GroupBox {
-                VStack(alignment: .leading, spacing: 14) {
-                    SectionHeader(
-                        title: "环境配置",
-                        subtitle: "管理当前激活的 registry、NODE_OPTIONS 与自定义变量。",
-                        systemImage: "slider.horizontal.3"
-                    )
-
-                    if profiles.isEmpty {
-                        EmptyState(title: "当前没有可用配置", message: "创建一个配置后即可编辑环境变量。", systemImage: "slider.horizontal.3")
-                    } else {
-                        Picker("当前配置", selection: $selectedProfileID) {
-                            ForEach(profiles) { profile in
-                                Text(profile.name).tag(Optional(profile.id))
-                            }
-                        }
-                        .disabled(store.isLoading)
-                    }
-
-                    HStack(alignment: .bottom, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 7) {
-                            Text("新建配置")
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(.primary)
-                            TextField("输入配置名称", text: $newProfileName)
-                                .textFieldStyle(EnvPilotTextFieldStyle())
-                                .disabled(store.isLoading)
-                        }
-                        .frame(maxWidth: .infinity)
-                        Button {
-                            let name = newProfileName.trimmingCharacters(in: .whitespacesAndNewlines)
-                            newProfileName = ""
-                            Task { await store.createProfile(named: name) }
-                        } label: {
-                            Label("创建", systemImage: "plus")
-                        }
-                        .controlSize(.large)
-                        .buttonStyle(.borderedProminent)
-                        .disabled(store.isLoading || newProfileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                    .padding(14)
-                    .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(AppPalette.borderStrong, lineWidth: 1.2)
-                    }
-                }
-            }
-
-            GroupBox("配置编辑") {
-                if selectedProfileID == nil {
-                    EmptyState(title: "请选择一个配置", message: "选中或创建配置后再编辑环境变量。", systemImage: "pencil")
-                } else {
-                    profileEditor
-                }
-            }
-        }
-    }
-
-    private var profileEditor: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 12) {
-                ProfileInputRow(title: "配置名称") {
-                    TextField("例如：默认、公司网络、私有源", text: $draftProfile.name)
-                        .textFieldStyle(EnvPilotTextFieldStyle())
-                        .disabled(store.isLoading)
-                }
-                ProfileInputRow(title: "npm registry") {
-                    TextField("https://registry.npmjs.org/", text: $draftProfile.npmRegistry)
-                        .textFieldStyle(EnvPilotTextFieldStyle())
-                        .disabled(store.isLoading)
-                }
-                ProfileInputRow(title: "pnpm registry") {
-                    TextField("留空则不设置", text: $draftProfile.pnpmRegistry)
-                        .textFieldStyle(EnvPilotTextFieldStyle())
-                        .disabled(store.isLoading)
-                }
-                ProfileInputRow(title: "yarn registry") {
-                    TextField("留空则不设置", text: $draftProfile.yarnRegistry)
-                        .textFieldStyle(EnvPilotTextFieldStyle())
-                        .disabled(store.isLoading)
-                }
-                ProfileInputRow(title: "NODE_OPTIONS") {
-                    TextField("例如 --max-old-space-size=4096", text: $draftProfile.nodeOptions)
-                        .textFieldStyle(EnvPilotTextFieldStyle())
-                        .disabled(store.isLoading)
-                }
-            }
-            .padding(14)
-            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(AppPalette.borderStrong, lineWidth: 1)
-            }
-
-            Divider()
-
-            HStack {
-                Text("自定义环境变量")
-                    .font(.headline)
-                Spacer()
-                Button {
-                    draftProfile.variables.append(CustomEnvironmentVariable(key: "", value: ""))
-                } label: {
-                    Label("新增变量", systemImage: "plus")
-                }
-                .disabled(store.isLoading)
-            }
-
-            if draftProfile.variables.isEmpty {
-                Text("暂无自定义变量。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                VStack(spacing: 8) {
-                    ForEach(Array(draftProfile.variables.indices), id: \.self) { index in
-                        HStack(spacing: 8) {
-                            TextField("KEY", text: $draftProfile.variables[index].key)
-                                .textFieldStyle(EnvPilotTextFieldStyle())
-                                .disabled(store.isLoading)
-                            TextField("VALUE", text: $draftProfile.variables[index].value)
-                                .textFieldStyle(EnvPilotTextFieldStyle())
-                                .disabled(store.isLoading)
-                            Button(role: .destructive) {
-                                draftProfile.variables.remove(at: index)
-                            } label: {
-                                Image(systemName: "minus.circle")
-                            }
-                            .buttonStyle(.borderless)
-                            .help("删除变量")
-                            .disabled(store.isLoading)
-                        }
-                    }
-                }
-            }
-
-            HStack {
-                Spacer()
-                Button {
-                    synchronizeFromSnapshot()
-                } label: {
-                    Label("重置", systemImage: "arrow.uturn.backward")
-                }
-                .disabled(store.isLoading)
-
-                Button {
-                    Task { await store.saveProfile(draftProfile) }
-                } label: {
-                    Label("保存配置", systemImage: "checkmark")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(store.isLoading || draftProfile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
+        EnvironmentProfilesView(
+            profiles: profiles,
+            selectedProfileID: selectedProfileID,
+            draftProfile: $draftProfile,
+            newProfileName: $newProfileName,
+            isLoading: store.isLoading,
+            isDirty: isProfileDirty,
+            validationMessage: profileValidationMessage,
+            onSelectProfile: requestProfileSelection,
+            onCreateProfile: createProfile,
+            onResetProfile: { synchronizeFromSnapshot(forceProfile: true) },
+            onSaveProfile: { Task { await store.saveProfile(draftProfile) } }
+        )
     }
 
     private var currentProfileName: String {
@@ -811,8 +877,173 @@ struct SettingsView: View {
         return profile.name
     }
 
+    private var sectionSelectionBinding: Binding<SettingsSection?> {
+        Binding(
+            get: { selectedSection },
+            set: { requestSectionSelection($0) }
+        )
+    }
+
+    private var uninstallConfirmationBinding: Binding<Bool> {
+        Binding(
+            get: { pendingUninstallRequest != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingUninstallRequest = nil
+                }
+            }
+        )
+    }
+
+    private var pendingProfileNavigationBinding: Binding<Bool> {
+        Binding(
+            get: { pendingProfileNavigation != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingProfileNavigation = nil
+                }
+            }
+        )
+    }
+
+    private var isProfileDirty: Bool {
+        guard let selectedProfileID,
+              let savedProfile = profiles.first(where: { $0.id == selectedProfileID }) else {
+            return false
+        }
+        return draftProfile != savedProfile
+    }
+
+    private var profileValidationMessage: String? {
+        if draftProfile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "环境预设名称不能为空。"
+        }
+
+        let registries = [
+            ("npm registry", draftProfile.npmRegistry),
+            ("pnpm registry", draftProfile.pnpmRegistry),
+            ("yarn registry", draftProfile.yarnRegistry),
+        ]
+        for (label, value) in registries {
+            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalized.isEmpty else {
+                continue
+            }
+            guard let components = URLComponents(string: normalized),
+                  let scheme = components.scheme?.lowercased(),
+                  ["http", "https"].contains(scheme),
+                  components.host?.isEmpty == false else {
+                return "\(label) 需要填写完整的 http 或 https 地址。"
+            }
+        }
+
+        let keys = draftProfile.variables.map { $0.key.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if keys.contains(where: { $0.isEmpty }) {
+            return "自定义环境变量名称不能为空。"
+        }
+        if let invalidKey = keys.first(where: {
+            $0.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) == nil
+        }) {
+            return "环境变量“\(invalidKey)”格式无效，只能使用字母、数字和下划线，且不能以数字开头。"
+        }
+        if Set(keys).count != keys.count {
+            return "自定义环境变量名称不能重复。"
+        }
+        return nil
+    }
+
+    private func requestSectionSelection(_ section: SettingsSection?) {
+        guard section != selectedSection else {
+            return
+        }
+        if selectedSection == .profiles, section != .profiles, isProfileDirty {
+            pendingProfileNavigation = .section(section)
+            return
+        }
+        selectedSection = section
+    }
+
+    private func requestProfileSelection(_ profileID: UUID?) {
+        guard profileID != selectedProfileID else {
+            return
+        }
+        if isProfileDirty {
+            pendingProfileNavigation = .profile(profileID)
+            return
+        }
+        commitProfileSelection(profileID)
+    }
+
+    private func createProfile() {
+        let name = newProfileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            return
+        }
+        newProfileName = ""
+        Task { await store.createProfile(named: name) }
+    }
+
+    private func commitProfileSelection(_ profileID: UUID?) {
+        selectedProfileID = profileID
+        if let profileID,
+           let selected = profiles.first(where: { $0.id == profileID }) {
+            draftProfile = selected
+            Task { await store.setSelectedProfile(id: profileID) }
+        }
+    }
+
+    private func saveProfileAndContinue() {
+        guard let destination = pendingProfileNavigation,
+              profileValidationMessage == nil else {
+            return
+        }
+        let profile = draftProfile
+        Task {
+            guard await store.saveProfile(profile) else {
+                return
+            }
+            pendingProfileNavigation = nil
+            continueProfileNavigation(to: destination)
+        }
+    }
+
+    private func discardProfileChangesAndContinue() {
+        guard let destination = pendingProfileNavigation else {
+            return
+        }
+        synchronizeFromSnapshot(forceProfile: true)
+        pendingProfileNavigation = nil
+        continueProfileNavigation(to: destination)
+    }
+
+    private func continueProfileNavigation(to destination: PendingProfileNavigation) {
+        switch destination {
+        case .profile(let profileID):
+            commitProfileSelection(profileID)
+        case .section(let section):
+            selectedSection = section
+        }
+    }
+
+    private func performUninstall(_ request: RuntimeUninstallRequest) {
+        pendingUninstallRequest = nil
+        guard !request.isCurrent else {
+            return
+        }
+        Task {
+            switch request.target {
+            case .node(let version, _, _):
+                await store.uninstallNode(version: version)
+            case .java(let version, let homePath, _):
+                await store.uninstallJava(version: version, homePath: homePath)
+            case .python(let version, let homePath, _):
+                await store.uninstallPython(version: version, homePath: homePath)
+            }
+        }
+    }
+
     private var nodeEmptyMessage: String {
-        var messages = ["可以在上方查询 Node 官方候选版本并安装到 ENVPilot 目录。"]
+        var messages = ["可以在上方获取 Node 官方候选版本并安装到 ENVPilot 目录。"]
         if let selectedVersion = store.snapshot?.settings.selectedVersion, !selectedVersion.isEmpty {
             messages.append("当前配置版本是 \(selectedVersion)，但未检测到对应的 ENVPilot Node 安装路径。")
         }
@@ -848,7 +1079,7 @@ struct SettingsView: View {
     }
 
     private var filteredJavaDownloadCandidates: [JavaDownloadCandidate] {
-        let query = javaCandidateSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let query = normalizedJavaCandidateSearchText
         guard !query.isEmpty else {
             return store.javaDownloadCandidates
         }
@@ -863,6 +1094,14 @@ struct SettingsView: View {
             .lowercased()
             .contains(query)
         }
+    }
+
+    private var normalizedJavaCandidateSearchText: String {
+        javaCandidateSearchText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "jdk", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var filteredPythonDownloadCandidates: [PythonDownloadCandidate] {
@@ -934,7 +1173,7 @@ struct SettingsView: View {
         path.contains("/.envpilot/runtimes/python/")
     }
 
-    private func synchronizeFromSnapshot() {
+    private func synchronizeFromSnapshot(forceProfile: Bool = false) {
         guard let snapshot = store.snapshot else {
             return
         }
@@ -946,11 +1185,14 @@ struct SettingsView: View {
         let availableProfiles = snapshot.settings.profiles
 
         let preferredID = snapshot.settings.selectedProfileID ?? availableProfiles.first?.id
+        let profileSelectionChanged = selectedProfileID != preferredID
         selectedProfileID = preferredID
 
         if let preferredID,
            let selected = availableProfiles.first(where: { $0.id == preferredID }) {
-            draftProfile = selected
+            if forceProfile || profileSelectionChanged || !isProfileDirty {
+                draftProfile = selected
+            }
         } else if let first = availableProfiles.first {
             draftProfile = first
         }
@@ -990,7 +1232,7 @@ struct SettingsView: View {
     private func nodeCandidateBadges(_ candidate: NodeDownloadCandidate, isInstalled: Bool) -> [StatusBadgeModel] {
         var badges: [StatusBadgeModel] = []
         if isInstalled {
-            badges.append(StatusBadgeModel(text: "已下载", systemImage: "checkmark.circle.fill", color: .green))
+            badges.append(StatusBadgeModel(text: "已安装", systemImage: "checkmark.circle.fill", color: .green))
         }
         if candidate.lts != nil {
             badges.append(StatusBadgeModel(text: "LTS", systemImage: "clock.badge.checkmark", color: .blue))
@@ -1001,7 +1243,7 @@ struct SettingsView: View {
     private func javaCandidateBadges(_ candidate: JavaDownloadCandidate, isInstalled: Bool) -> [StatusBadgeModel] {
         var badges: [StatusBadgeModel] = []
         if isInstalled {
-            badges.append(StatusBadgeModel(text: "已下载", systemImage: "checkmark.circle.fill", color: .green))
+            badges.append(StatusBadgeModel(text: "已安装", systemImage: "checkmark.circle.fill", color: .green))
         }
         if candidate.version.contains("LTS") || [25, 21, 17, 11, 8].contains(candidate.featureVersion) {
             badges.append(StatusBadgeModel(text: "LTS", systemImage: "clock.badge.checkmark", color: .blue))
@@ -1012,7 +1254,7 @@ struct SettingsView: View {
     private func pythonCandidateBadges(_ candidate: PythonDownloadCandidate, isInstalled: Bool) -> [StatusBadgeModel] {
         var badges: [StatusBadgeModel] = []
         if isInstalled {
-            badges.append(StatusBadgeModel(text: "已下载", systemImage: "checkmark.circle.fill", color: .green))
+            badges.append(StatusBadgeModel(text: "已安装", systemImage: "checkmark.circle.fill", color: .green))
         }
         badges.append(StatusBadgeModel(text: "官方源码", systemImage: "curlybraces", color: .blue))
         return badges
@@ -1023,29 +1265,32 @@ struct SettingsView: View {
     }
 }
 
-private enum AppPalette {
-    static let pageBackgroundTop = Color(red: 0.97, green: 0.985, blue: 1.00)
-    static let pageBackgroundBottom = Color(red: 0.95, green: 0.97, blue: 0.965)
+enum AppPalette {
+    static let windowBackground = Color(nsColor: .windowBackgroundColor)
+    static let sidebarBackground = Color(nsColor: .windowBackgroundColor)
     static let panelSurface = Color(nsColor: .controlBackgroundColor)
     static let controlSurface = Color(nsColor: .textBackgroundColor)
-    static let rowSurface = Color.white.opacity(0.72)
-    static let sidebarSurface = Color(nsColor: .windowBackgroundColor)
-    static let selectedSurface = Color.accentColor.opacity(0.14)
-    static let border = Color.black.opacity(0.10)
-    static let borderStrong = Color.accentColor.opacity(0.34)
-    static let shadow = Color.black.opacity(0.07)
+    static let rowSurface = Color(nsColor: .textBackgroundColor).opacity(0.82)
+    static let border = Color(nsColor: .separatorColor).opacity(0.52)
+    static let borderStrong = Color(nsColor: .separatorColor).opacity(0.82)
+    static let shadow = Color.black.opacity(0.03)
 }
 
 private struct LiquidGlassBackground: View {
     var body: some View {
-        LinearGradient(
-            colors: [
-                AppPalette.pageBackgroundTop,
-                AppPalette.pageBackgroundBottom,
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
+        ZStack {
+            AppPalette.windowBackground
+
+            LinearGradient(
+                colors: [
+                    Color.accentColor.opacity(0.035),
+                    Color.clear,
+                    Color(nsColor: .systemTeal).opacity(0.015),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
         .ignoresSafeArea()
     }
 }
@@ -1062,71 +1307,65 @@ private struct LiquidGlassPanelModifier: ViewModifier {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(AppPalette.border, lineWidth: 1)
             }
-            .overlay(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.56),
-                                Color.white.opacity(0.12),
-                                Color.clear,
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
-                    .allowsHitTesting(false)
-            }
-            .shadow(color: AppPalette.shadow, radius: 16, x: 0, y: 8)
+            .shadow(color: AppPalette.shadow, radius: 2, x: 0, y: 1)
     }
 }
 
-private extension View {
+extension View {
     func liquidGlassPanel(cornerRadius: CGFloat = 14, tint: Color = .clear) -> some View {
         modifier(LiquidGlassPanelModifier(cornerRadius: cornerRadius, tint: tint))
     }
-}
 
-private struct EnvPilotTextFieldStyle: TextFieldStyle {
-    func _body(configuration: TextField<Self._Label>) -> some View {
-        configuration
-            .textFieldStyle(.plain)
-            .padding(.horizontal, 11)
-            .frame(minHeight: 36)
-            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+    func settingsControlGroup() -> some View {
+        padding(13)
+            .background(AppPalette.controlSurface.opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .strokeBorder(Color.accentColor.opacity(0.62), lineWidth: 1.2)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(AppPalette.border, lineWidth: 1)
             }
-            .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 1)
     }
 }
 
-private struct ProfileInputRow<Content: View>: View {
+struct EnvPilotTextFieldStyle: TextFieldStyle {
+    func _body(configuration: TextField<Self._Label>) -> some View {
+        configuration
+            .textFieldStyle(.plain)
+            .padding(.horizontal, 10)
+            .frame(minHeight: 32)
+            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(AppPalette.borderStrong, lineWidth: 1)
+            }
+    }
+}
+
+struct ProfileInputRow<Content: View>: View {
     let title: String
     @ViewBuilder var content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(title)
-                .font(.caption.weight(.medium))
+                .font(.callout)
                 .foregroundStyle(.secondary)
+                .frame(width: 116, alignment: .trailing)
             content
+                .frame(maxWidth: .infinity)
         }
     }
 }
 
 private struct LiquidGlassGroupBoxStyle: GroupBoxStyle {
     func makeBody(configuration: Configuration) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             configuration.label
                 .font(.headline)
             configuration.content
         }
-        .padding(16)
+        .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .liquidGlassPanel(cornerRadius: 16, tint: Color.white.opacity(0.08))
+        .liquidGlassPanel(cornerRadius: 14, tint: Color.clear)
     }
 }
 
@@ -1138,19 +1377,16 @@ private struct SettingsDetailHeader: View {
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
             Image(systemName: section.systemImage)
-                .font(.title2.weight(.semibold))
+                .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
-                .frame(width: 38, height: 38)
-                .background(AppPalette.selectedSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(AppPalette.borderStrong, lineWidth: 1)
-                }
+                .frame(width: 42, height: 42)
+                .background(Color.accentColor.opacity(0.11), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(section.title)
-                    .font(.title2.weight(.semibold))
+                    .font(.title.weight(.semibold))
                 Text(section.subtitle)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
 
@@ -1166,17 +1402,13 @@ private struct SettingsDetailHeader: View {
             } label: {
                 Label("刷新", systemImage: "arrow.clockwise")
             }
-            .controlSize(.large)
+            .controlSize(.regular)
             .buttonStyle(.bordered)
+            .keyboardShortcut("r", modifiers: .command)
+            .help("刷新运行时信息")
             .disabled(isLoading)
         }
-        .padding(16)
-        .background(AppPalette.panelSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(AppPalette.border, lineWidth: 1)
-        }
-        .shadow(color: AppPalette.shadow, radius: 14, x: 0, y: 7)
+        .padding(.bottom, 4)
     }
 }
 
@@ -1203,9 +1435,9 @@ private enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .python:
             return "Python"
         case .project:
-            return "项目策略"
+            return "项目环境"
         case .profiles:
-            return "环境配置"
+            return "环境预设"
         }
     }
 
@@ -1220,9 +1452,9 @@ private enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .python:
             return "查询、安装、切换和卸载 ENVPilot 管理的 Python。"
         case .project:
-            return "配置进入项目目录时的版本选择规则。"
+            return "查看并配置进入项目目录时的版本选择规则。"
         case .profiles:
-            return "管理 registry、NODE_OPTIONS 与自定义环境变量。"
+            return "管理 registry、NODE_OPTIONS 与自定义环境变量预设。"
         }
     }
 
@@ -1251,35 +1483,6 @@ private struct StatusBadgeModel: Identifiable {
     let color: Color
 }
 
-private struct RuntimeMenuRow: View {
-    let title: String
-    let value: String
-    let detail: String
-    let systemImage: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: systemImage)
-                .foregroundStyle(.secondary)
-                .frame(width: 24)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(title)
-                        .font(.subheadline.weight(.medium))
-                    Spacer()
-                    Text(value)
-                        .font(.subheadline.monospacedDigit().weight(.semibold))
-                }
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-        }
-    }
-}
-
 private struct QuickRuntimeMenu<Item: Identifiable>: View {
     let title: String
     let emptyTitle: String
@@ -1290,51 +1493,93 @@ private struct QuickRuntimeMenu<Item: Identifiable>: View {
     let action: (Item) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-
-            if items.isEmpty {
-                Text(emptyTitle)
+        if items.isEmpty {
+            HStack(spacing: 8) {
+                Text(title)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 4)
-            } else {
+                    .frame(width: 48, alignment: .leading)
+                Text(emptyTitle)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 34)
+        } else {
+            Menu {
                 ForEach(items) { item in
                     Button {
                         action(item)
                     } label: {
-                        HStack(spacing: 8) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(version(item))
-                                    .font(.subheadline)
-                                    .foregroundStyle(.primary)
-                                Text(path(item))
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
-                            Spacer()
-                            if isSelected(item) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                            }
-                        }
+                        Label(version(item), systemImage: isSelected(item) ? "checkmark.circle.fill" : "circle")
                     }
-                    .buttonStyle(.plain)
-                    .padding(8)
-                    .background(isSelected(item) ? Color.green.opacity(0.10) : AppPalette.rowSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(isSelected(item) ? Color.green.opacity(0.34) : AppPalette.border, lineWidth: 1)
-                    }
-                    .padding(.vertical, 4)
+                    .help(path(item))
                 }
+            } label: {
+                HStack(spacing: 8) {
+                    Text(title)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 48, alignment: .leading)
+                    Text(selectedVersion)
+                        .font(.subheadline.monospacedDigit().weight(.medium))
+                    Spacer(minLength: 0)
+                    Text("切换")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .frame(height: 34)
+                .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .buttonStyle(.plain)
+            .background(AppPalette.rowSurface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(AppPalette.border, lineWidth: 1)
             }
         }
+    }
+
+    private var selectedVersion: String {
+        items.first(where: isSelected).map(version) ?? "未选择"
+    }
+}
+
+private struct RuntimeMenuRow: View {
+    let title: String
+    let value: String
+    let detail: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(value)
+                        .font(.subheadline.monospacedDigit().weight(.medium))
+                        .lineLimit(1)
+                }
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1372,23 +1617,7 @@ private struct MessageRow: View {
     }
 }
 
-private struct ProgressBanner: View {
-    let message: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            ProgressView()
-                .controlSize(.small)
-            Text(message)
-                .foregroundStyle(.secondary)
-            Spacer()
-        }
-        .padding(10)
-        .liquidGlassPanel(cornerRadius: 12, tint: Color.orange.opacity(0.06))
-    }
-}
-
-private struct InlineMessage: View {
+struct InlineMessage: View {
     let message: String
     let systemImage: String
     let color: Color
@@ -1403,12 +1632,18 @@ private struct InlineMessage: View {
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
         }
-        .padding(10)
-        .liquidGlassPanel(cornerRadius: 12, tint: color.opacity(0.08))
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .background(color.opacity(0.075), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(color.opacity(0.18), lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 
-private struct SectionHeader: View {
+struct SectionHeader: View {
     let title: String
     let subtitle: String
     let systemImage: String
@@ -1416,60 +1651,151 @@ private struct SectionHeader: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: systemImage)
-                .font(.title3)
-                .foregroundStyle(.secondary)
-                .frame(width: 28)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 30, height: 30)
+                .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.title3.weight(.semibold))
+                    .font(.headline)
                 Text(subtitle)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
         }
     }
 }
 
-private struct MetricTile: View {
+private struct RuntimeOverviewCard: View {
     let title: String
-    let value: String
+    let version: String
+    let status: StatusBadgeModel
+    let path: String
     let systemImage: String
+    let color: Color
+    let actionTitle: String
+    let action: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 15) {
+            HStack(alignment: .top) {
                 Image(systemName: systemImage)
-                    .foregroundStyle(.secondary)
-                Text(title)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(color)
+                    .frame(width: 38, height: 38)
+                    .background(color.opacity(0.11), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                Spacer()
+
+                StatusBadge(
+                    text: status.text,
+                    systemImage: status.systemImage,
+                    color: status.color
+                )
             }
-            Text(value)
-                .font(.title3.monospacedDigit().weight(.semibold))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Text(version)
+                    .font(.title2.monospacedDigit().weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+
+            Text(path)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .minimumScaleFactor(0.8)
+                .truncationMode(.middle)
+                .help(path)
+
+            Button {
+                action()
+            } label: {
+                HStack(spacing: 5) {
+                    Text(actionTitle)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 188, alignment: .leading)
+        .background(AppPalette.panelSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(color.opacity(0.78))
+                .frame(width: 3)
+                .padding(.vertical, 14)
+        }
         .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(AppPalette.border, lineWidth: 1)
         }
+        .shadow(color: AppPalette.shadow, radius: 2.5, x: 0, y: 1)
     }
 }
 
 private struct PathRow: View {
     let title: String
     let value: String
+    @State private var didCopy = false
 
     var body: some View {
-        LabeledContent(title) {
+        HStack(spacing: 10) {
+            Text(title)
+                .frame(width: 132, alignment: .leading)
+
             Text(value)
-                .font(.callout.monospaced())
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .help(value)
+
+            Spacer(minLength: 8)
+
+            Button {
+                DesktopPathActions.copy(value)
+                didCopy = true
+                Task {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    didCopy = false
+                }
+            } label: {
+                Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.borderless)
+            .help(didCopy ? "已复制" : "复制路径")
+            .accessibilityLabel(didCopy ? "路径已复制" : "复制路径")
+            .disabled(!isAbsolutePath)
+
+            Button {
+                DesktopPathActions.revealInFinder(value)
+            } label: {
+                Image(systemName: "folder")
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.borderless)
+            .help("在 Finder 中显示")
+            .accessibilityLabel("在 Finder 中显示路径")
+            .disabled(!pathExists)
         }
+    }
+
+    private var isAbsolutePath: Bool {
+        value.hasPrefix("/")
+    }
+
+    private var pathExists: Bool {
+        isAbsolutePath && FileManager.default.fileExists(atPath: value)
     }
 }
 
@@ -1515,22 +1841,30 @@ private struct RuntimeListRow: View {
                 } label: {
                     Label(primaryTitle, systemImage: primarySystemImage)
                 }
+                .buttonStyle(.bordered)
                 .disabled(isDisabled)
             }
 
             if !destructiveTitle.isEmpty {
-                Button(role: .destructive) {
-                    destructiveAction()
+                Menu {
+                    Button(role: .destructive) {
+                        destructiveAction()
+                    } label: {
+                        Label(destructiveTitle, systemImage: "trash")
+                    }
                 } label: {
-                    Label(destructiveTitle, systemImage: "trash")
+                    Label("更多", systemImage: "ellipsis.circle")
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("更多版本操作")
                 .disabled(isDisabled)
             }
         }
-        .padding(12)
-        .background(AppPalette.rowSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(13)
+        .background(AppPalette.rowSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(AppPalette.border, lineWidth: 1)
         }
     }
@@ -1540,7 +1874,7 @@ private struct DownloadCandidateRow: View {
     let title: String
     let subtitle: String
     let badges: [StatusBadgeModel]
-    let progressMessage: String?
+    let installationProgress: RuntimeInstallationProgress?
     let actionTitle: String
     let actionSystemImage: String
     let action: () -> Void
@@ -1561,12 +1895,36 @@ private struct DownloadCandidateRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if let progressMessage, !progressMessage.isEmpty {
-                    Text(progressMessage)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.blue)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                if let installationProgress {
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(spacing: 6) {
+                            Text(installationProgress.stage.rawValue)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.blue)
+                            Spacer(minLength: 8)
+                            if let fraction = installationProgress.fractionCompleted {
+                                Text(fraction, format: .percent.precision(.fractionLength(0)))
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        if let fraction = installationProgress.fractionCompleted {
+                            ProgressView(value: fraction)
+                                .progressViewStyle(.linear)
+                        } else {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text(installationProgress.message)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .padding(.top, 3)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("安装阶段：\(installationProgress.stage.rawValue)")
+                    .accessibilityValue(installationProgress.message)
                 }
             }
             Spacer()
@@ -1575,28 +1933,31 @@ private struct DownloadCandidateRow: View {
             } label: {
                 Label(actionTitle, systemImage: actionSystemImage)
             }
+            .buttonStyle(.bordered)
             .disabled(isDisabled)
         }
-        .padding(12)
-        .background(progressMessage == nil ? AppPalette.rowSurface : Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(13)
+        .background(installationProgress == nil ? AppPalette.rowSurface : Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(progressMessage == nil ? AppPalette.border : Color.blue.opacity(0.34), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(installationProgress == nil ? AppPalette.border : Color.blue.opacity(0.34), lineWidth: 1)
         }
     }
 }
 
-private struct EmptyState: View {
+struct EmptyState: View {
     let title: String
     let message: String
     let systemImage: String
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        VStack(spacing: 9) {
             Image(systemName: systemImage)
-                .font(.title3)
+                .font(.system(size: 22, weight: .medium))
                 .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 4) {
+                .frame(width: 42, height: 42)
+                .background(AppPalette.controlSurface.opacity(0.8), in: Circle())
+            VStack(spacing: 4) {
                 Text(title)
                     .font(.subheadline.weight(.medium))
                 Text(message)
@@ -1604,13 +1965,14 @@ private struct EmptyState: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
+            .multilineTextAlignment(.center)
         }
-        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 22)
     }
 }
 
-private struct StatusBadge: View {
+struct StatusBadge: View {
     let text: String
     let systemImage: String
     let color: Color
@@ -1630,8 +1992,9 @@ private struct StatusBadge: View {
             }
             .overlay(
                 Capsule()
-                    .stroke(Color.white.opacity(0.28), lineWidth: 0.8)
+                    .stroke(AppPalette.border, lineWidth: 0.8)
             )
             .clipShape(Capsule())
+            .accessibilityElement(children: .combine)
     }
 }

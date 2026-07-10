@@ -20,16 +20,15 @@ struct ENVPilotApp: App {
 
         Settings {
             SettingsView(store: store)
-                .frame(minWidth: 860, minHeight: 620)
+                .frame(minWidth: 900, minHeight: 640)
         }
     }
 }
 
 @MainActor
 final class ENVPilotApplicationDelegate: NSObject, NSApplicationDelegate {
-    static weak var store: NodeRuntimeStore?
+    static var store: NodeRuntimeStore?
     private static weak var shared: ENVPilotApplicationDelegate?
-
     private var mainWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -55,15 +54,19 @@ final class ENVPilotApplicationDelegate: NSObject, NSApplicationDelegate {
             }
 
             let contentView = SettingsView(store: store)
-                .frame(minWidth: 860, minHeight: 620)
+                .frame(minWidth: 900, minHeight: 640)
             let hostingView = NSHostingView(rootView: contentView)
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 960, height: 680),
+                contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
             )
             window.title = "ENVPilot"
+            window.titleVisibility = .visible
+            window.titlebarAppearsTransparent = false
+            window.titlebarSeparatorStyle = .automatic
+            window.toolbarStyle = .unified
             window.contentView = hostingView
             window.center()
             window.isReleasedWhenClosed = false
