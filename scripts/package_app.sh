@@ -78,6 +78,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+codesign --force --sign - "$APP_BUNDLE/Contents/Resources/bin/envpilot-helper"
+codesign --force --sign - "$APP_BUNDLE"
+
 rm -rf "$DMG_STAGE_DIR"
 mkdir -p "$DMG_STAGE_DIR"
 cp -R "$APP_BUNDLE" "$DMG_STAGE_DIR/${APP_NAME}.app"
