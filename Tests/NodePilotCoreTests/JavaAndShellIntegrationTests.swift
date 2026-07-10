@@ -1,6 +1,8 @@
 import XCTest
 @testable import ENVPilotCore
 
+private let testManagedRuntimeRoot = "\(NSHomeDirectory())/.envpilot/runtimes"
+
 final class JavaAndShellIntegrationTests: XCTestCase {
     func testParseJavaInstallationsFromJavaHomeOutput() {
         let output = """
@@ -18,7 +20,7 @@ final class JavaAndShellIntegrationTests: XCTestCase {
 
     func testActivationScriptExportsJavaHomeWhenSelected() {
         let integration = ShellIntegrationService()
-        let javaHome = "/Users/me/.envpilot/runtimes/java/temurin-21.jdk/Contents/Home"
+        let javaHome = "\(testManagedRuntimeRoot)/java/temurin-21.jdk/Contents/Home"
         let settings = AppSettings(
             selectedJavaVersion: "21.0.4",
             selectedJavaHome: javaHome,
@@ -34,7 +36,7 @@ final class JavaAndShellIntegrationTests: XCTestCase {
 
     func testActivationScriptExportsNodeHomeForSelectedVersion() {
         let integration = ShellIntegrationService()
-        let nodeHome = "/Users/me/.envpilot/runtimes/node/14.21.3"
+        let nodeHome = "\(testManagedRuntimeRoot)/node/14.21.3"
         let settings = AppSettings(
             selectedVersion: "14.21.3",
             selectedNodePath: nodeHome,
@@ -71,8 +73,8 @@ final class JavaAndShellIntegrationTests: XCTestCase {
             encoding: .utf8
         )
 
-        let java11Home = "/Users/me/.envpilot/runtimes/java/temurin-11.jdk/Contents/Home"
-        let java25Home = "/Users/me/.envpilot/runtimes/java/temurin-25.jdk/Contents/Home"
+        let java11Home = "\(testManagedRuntimeRoot)/java/temurin-11.jdk/Contents/Home"
+        let java25Home = "\(testManagedRuntimeRoot)/java/temurin-25.jdk/Contents/Home"
         let settings = AppSettings(
             selectedJavaVersion: "25.0.2",
             selectedJavaHome: java25Home,
@@ -99,7 +101,7 @@ final class JavaAndShellIntegrationTests: XCTestCase {
             encoding: .utf8
         )
 
-        let nodeHome = "/Users/me/.envpilot/runtimes/node/24.15.0"
+        let nodeHome = "\(testManagedRuntimeRoot)/node/24.15.0"
         let settings = AppSettings(
             selectedVersion: "24.15.0",
             selectedNodePath: nodeHome,
@@ -124,6 +126,11 @@ final class JavaAndShellIntegrationTests: XCTestCase {
 
         let javaHome = tempRoot.javaHomeURL.path
         let shell = JavaDetectorMockShellRunner(outputsByCommandFragment: [
+            "/usr/libexec/java_home 2>/dev/null": .init(
+                standardOutput: "\(javaHome)\n",
+                standardError: "",
+                exitCode: 0
+            ),
             "'\(javaHome)/bin/java' -version 2>&1": .init(
                 standardOutput: "",
                 standardError: "openjdk version \"21.0.4\" 2024-07-16\n",

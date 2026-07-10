@@ -1,11 +1,13 @@
 import XCTest
 @testable import ENVPilotCore
 
+private let testManagedRuntimeRoot = "\(NSHomeDirectory())/.envpilot/runtimes"
+
 final class NodeEnvironmentServiceTests: XCTestCase {
     func testSelectDefaultNodePersistsVersionAndPathWithoutExternalCommand() throws {
         let store = InMemoryStore(settings: AppSettings())
         let shell = MockShellRunner()
-        let nodePath = "/Users/me/.envpilot/runtimes/node/20.11.1"
+        let nodePath = "\(testManagedRuntimeRoot)/node/20.11.1"
         let detector = MockDetector(
             installations: [
                 NodeInstallation(
@@ -52,7 +54,7 @@ final class NodeEnvironmentServiceTests: XCTestCase {
         let snapshot = try service.installNode(version: "20.11.1")
 
         XCTAssertEqual(snapshot.settings.selectedVersion, "20.11.1")
-        XCTAssertEqual(snapshot.settings.selectedNodePath, "/Users/me/.envpilot/runtimes/node/20.11.1")
+        XCTAssertEqual(snapshot.settings.selectedNodePath, "\(testManagedRuntimeRoot)/node/20.11.1")
         XCTAssertEqual(installer.operations, ["install-node:20.11.1"])
         XCTAssertFalse(shell.commands.contains { $0.contains("nvm install") })
     }
@@ -104,7 +106,7 @@ final class NodeEnvironmentServiceTests: XCTestCase {
     }
 
     func testUninstallNodeClearsSelectionWhenRemovingSelectedVersion() throws {
-        let nodePath = "/Users/me/.envpilot/runtimes/node/20.11.1"
+        let nodePath = "\(testManagedRuntimeRoot)/node/20.11.1"
         let store = InMemoryStore(settings: AppSettings(selectedVersion: "20.11.1", selectedNodePath: nodePath))
         let shell = MockShellRunner()
         let installer = MockInstaller()
@@ -184,8 +186,8 @@ final class NodeEnvironmentServiceTests: XCTestCase {
     }
 
     func testLoadSnapshotDeduplicatesNodeVersionsAndKeepsSelectedPath() throws {
-        let selectedPath = "/Users/me/.envpilot/runtimes/node/24.15.0"
-        let otherPath = "/Users/me/.envpilot/runtimes/node/24.15.0-copy"
+        let selectedPath = "\(testManagedRuntimeRoot)/node/24.15.0"
+        let otherPath = "\(testManagedRuntimeRoot)/node/24.15.0-copy"
         let store = InMemoryStore(settings: AppSettings(selectedVersion: "24.15.0", selectedNodePath: selectedPath))
         let service = NodeEnvironmentService(
             configStore: store,
@@ -218,8 +220,8 @@ final class NodeEnvironmentServiceTests: XCTestCase {
     }
 
     func testLoadSnapshotDeduplicatesNodeVersionsAndKeepsActivePathWhenUnselected() throws {
-        let inactivePath = "/Users/me/.envpilot/runtimes/node/24.15.0"
-        let activePath = "/Users/me/.envpilot/runtimes/node/24.15.0-active"
+        let inactivePath = "\(testManagedRuntimeRoot)/node/24.15.0"
+        let activePath = "\(testManagedRuntimeRoot)/node/24.15.0-active"
         let store = InMemoryStore(settings: AppSettings())
         let service = NodeEnvironmentService(
             configStore: store,
@@ -253,7 +255,7 @@ final class NodeEnvironmentServiceTests: XCTestCase {
     func testInstallJavaUsesManagedInstallerAndPersistsSelection() throws {
         let store = InMemoryStore(settings: AppSettings())
         let installer = MockInstaller()
-        let javaHome = "/Users/me/.envpilot/runtimes/java/temurin-21.jdk/Contents/Home"
+        let javaHome = "\(testManagedRuntimeRoot)/java/temurin-21.jdk/Contents/Home"
         let service = NodeEnvironmentService(
             configStore: store,
             detector: MockDetector(installations: [], activeVersion: nil, activeNodePath: nil),
@@ -277,7 +279,7 @@ final class NodeEnvironmentServiceTests: XCTestCase {
 
     func testSelectDefaultJavaPersistsHomeWithoutExternalCommand() throws {
         let store = InMemoryStore(settings: AppSettings())
-        let javaHome = "/Users/me/.envpilot/runtimes/java/temurin-17.jdk/Contents/Home"
+        let javaHome = "\(testManagedRuntimeRoot)/java/temurin-17.jdk/Contents/Home"
         let installer = MockInstaller()
         let service = NodeEnvironmentService(
             configStore: store,
@@ -315,7 +317,7 @@ final class NodeEnvironmentServiceTests: XCTestCase {
     }
 
     func testUninstallJavaUsesManagedInstallerAndClearsSelection() throws {
-        let javaHome = "/Users/me/.envpilot/runtimes/java/temurin-17.jdk/Contents/Home"
+        let javaHome = "\(testManagedRuntimeRoot)/java/temurin-17.jdk/Contents/Home"
         let store = InMemoryStore(settings: AppSettings(selectedJavaVersion: "17.0.16", selectedJavaHome: javaHome))
         let installer = MockInstaller()
         let service = NodeEnvironmentService(
@@ -386,7 +388,7 @@ private final class MockInstaller: RuntimeComponentInstalling, @unchecked Sendab
     func installNode(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeInstallation {
         operations.append("install-node:\(version)")
         let normalized = NodeInstallationDetector.normalizeVersion(version) ?? version
-        let installPath = "/Users/me/.envpilot/runtimes/node/\(normalized)"
+        let installPath = "\(testManagedRuntimeRoot)/node/\(normalized)"
         return NodeInstallation(version: normalized, installPath: installPath, executablePath: "\(installPath)/bin/node")
     }
 
@@ -408,7 +410,7 @@ private final class MockInstaller: RuntimeComponentInstalling, @unchecked Sendab
 
     func installJava(featureVersion: Int, progress: (@Sendable (String) -> Void)?) throws -> JavaInstallation {
         operations.append("install-java:\(featureVersion)")
-        let homePath = "/Users/me/.envpilot/runtimes/java/temurin-\(featureVersion).jdk/Contents/Home"
+        let homePath = "\(testManagedRuntimeRoot)/java/temurin-\(featureVersion).jdk/Contents/Home"
         return JavaInstallation(version: "\(featureVersion).0.0", homePath: homePath)
     }
 
@@ -428,7 +430,7 @@ private final class MockInstaller: RuntimeComponentInstalling, @unchecked Sendab
 
     func installPython(version: String, progress: (@Sendable (String) -> Void)?) throws -> PythonInstallation {
         operations.append("install-python:\(version)")
-        let homePath = "/Users/me/.envpilot/runtimes/python/\(version)"
+        let homePath = "\(testManagedRuntimeRoot)/python/\(version)"
         return PythonInstallation(
             version: version,
             homePath: homePath,
