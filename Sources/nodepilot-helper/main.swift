@@ -429,7 +429,7 @@ struct ENVPilotCLI {
             throw CLIError(description: "install-jdk requires <feature-version>, for example 21", exitCode: .usageError)
         }
         if parseFlagOption(name: "--dry-run", in: arguments) {
-            print("dry-run: would install Temurin JDK \(featureVersion) through ENVPilot")
+            print("dry-run: would install JDK \(featureVersion) through ENVPilot")
             return
         }
         let snapshot = try runtimeService.installJava(featureVersion: featureVersion, progress: cliProgressPrinter())

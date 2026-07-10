@@ -97,7 +97,7 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
             : Array(Set(releases.availableLTSReleases + [releases.mostRecentFeatureRelease]))
             .sorted(by: >)
         return try featureVersions.compactMap { featureVersion in
-            try latestTemurinCandidate(featureVersion: featureVersion)
+            try latestJavaCandidate(featureVersion: featureVersion)
         }
     }
 
@@ -105,7 +105,7 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
         guard featureVersion > 0 else {
             throw RuntimeComponentInstallerError.invalidJavaFeatureVersion(String(featureVersion))
         }
-        let candidate = try latestTemurinCandidate(featureVersion: featureVersion)
+        let candidate = try latestJavaCandidate(featureVersion: featureVersion)
         guard let candidate else {
             throw RuntimeComponentInstallerError.javaCandidateNotFound(String(featureVersion))
         }
@@ -115,20 +115,20 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
         defer { try? FileManager.default.removeItem(at: workDirectory) }
 
         let archiveURLOnDisk = workDirectory.appendingPathComponent(candidate.packageName)
-        progress?("正在下载 Temurin JDK \(candidate.version) 0%")
+        progress?("正在下载 \(candidate.vendor) JDK \(candidate.version) 0%")
         try downloadFile(
             from: archiveURL,
             to: archiveURLOnDisk,
-            label: "正在下载 Temurin JDK \(candidate.version)",
+            label: "正在下载 \(candidate.vendor) JDK \(candidate.version)",
             progress: progress
         )
 
         if let checksum = candidate.checksum, !checksum.isEmpty {
-            progress?("正在安装 Temurin JDK \(candidate.version)：校验 70%")
+            progress?("正在安装 \(candidate.vendor) JDK \(candidate.version)：校验 70%")
             try verifySHA256(fileURL: archiveURLOnDisk, expectedHex: checksum)
         }
 
-        progress?("正在安装 Temurin JDK \(candidate.version)：解压 85%")
+        progress?("正在安装 \(candidate.vendor) JDK \(candidate.version)：解压 85%")
         let extractDirectory = workDirectory.appendingPathComponent("extract", isDirectory: true)
         try FileManager.default.createDirectory(at: extractDirectory, withIntermediateDirectories: true)
         try extractArchive(archiveURLOnDisk, to: extractDirectory)
@@ -138,12 +138,13 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
         }
 
         let sanitizedVersion = Self.sanitizePathComponent(candidate.version)
-        let targetBundle = Self.managedJavaRoot().appendingPathComponent("temurin-\(sanitizedVersion).jdk", isDirectory: true)
+        let sanitizedVendor = Self.sanitizePathComponent(candidate.vendor.lowercased())
+        let targetBundle = Self.managedJavaRoot().appendingPathComponent("\(sanitizedVendor)-\(sanitizedVersion).jdk", isDirectory: true)
         let targetHome = targetBundle.appendingPathComponent("Contents/Home", isDirectory: true)
-        progress?("正在安装 Temurin JDK \(candidate.version)：写入 95%")
+        progress?("正在安装 \(candidate.vendor) JDK \(candidate.version)：写入 95%")
         try replaceManagedDirectory(source: extractedHome, target: targetHome)
         let version = versionFromJavaHome(targetHome.path) ?? candidate.version
-        progress?("Temurin JDK \(candidate.version) 安装完成 100%")
+        progress?("\(candidate.vendor) JDK \(candidate.version) 安装完成 100%")
         return JavaInstallation(version: version, homePath: targetHome.path)
     }
 
@@ -293,6 +294,13 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
         return latestReleases
     }
 
+    func latestJavaCandidate(featureVersion: Int) throws -> JavaDownloadCandidate? {
+        if let candidate = try latestTemurinCandidate(featureVersion: featureVersion) {
+            return candidate
+        }
+        return try latestZuluCandidate(featureVersion: featureVersion)
+    }
+
     func latestTemurinCandidate(featureVersion: Int) throws -> JavaDownloadCandidate? {
         let url = try Self.url(
             "https://api.adoptium.net/v3/assets/latest/\(featureVersion)/hotspot"
@@ -316,6 +324,42 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
             downloadURL: package.link,
             checksum: package.checksum
         )
+    }
+
+    func latestZuluCandidate(featureVersion: Int) throws -> JavaDownloadCandidate? {
+        let url = try Self.url(
+            "https://api.azul.com/metadata/v1/zulu/packages/"
+                + "?java_version=\(featureVersion)"
+                + "&os=macos"
+                + "&arch=\(Self.zuluArchitecture)"
+                + "&java_package_type=jdk"
+                + "&archive_type=tar.gz"
+                + "&latest=true"
+        )
+        let packages = try fetchJSON(url, as: [ZuluPackage].self)
+        guard let package = latestZuluPackage(from: packages) else {
+            return nil
+        }
+        return JavaDownloadCandidate(
+            featureVersion: featureVersion,
+            version: package.openJDKVersionText,
+            vendor: "Zulu",
+            packageName: package.name,
+            downloadURL: package.downloadURL,
+            checksum: nil
+        )
+    }
+
+    private func latestZuluPackage(from packages: [ZuluPackage]) -> ZuluPackage? {
+        packages
+            .filter { !$0.name.contains("-fx-") }
+            .sorted { lhs, rhs in
+                if lhs.javaVersion != rhs.javaVersion {
+                    return lhs.javaVersion.lexicographicallyPrecedes(rhs.javaVersion) == false
+                }
+                return lhs.openJDKBuildNumber > rhs.openJDKBuildNumber
+            }
+            .first
     }
 
     func resolvePythonVersion(_ requestedVersion: String) throws -> String {
@@ -624,6 +668,14 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
         #endif
     }
 
+    static var zuluArchitecture: String {
+        #if arch(arm64)
+        "arm"
+        #else
+        "x86"
+        #endif
+    }
+
     static func managedNodeRoot() -> URL {
         URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
             .appendingPathComponent(".envpilot/runtimes/node", isDirectory: true)
@@ -900,6 +952,33 @@ private struct AdoptiumVersion: Decodable {
     }
 }
 
+private struct ZuluPackage: Decodable {
+    let downloadURL: String
+    let javaVersion: [Int]
+    let name: String
+    let openJDKBuildNumber: Int
+
+    var openJDKVersionText: String {
+        guard let major = javaVersion.first else {
+            return name
+        }
+
+        if major == 8, javaVersion.count >= 3 {
+            return "1.8.0_\(javaVersion[2])-b\(openJDKBuildNumber)"
+        }
+
+        let version = javaVersion.map(String.init).joined(separator: ".")
+        return "\(version)+\(openJDKBuildNumber)"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case downloadURL = "download_url"
+        case javaVersion = "java_version"
+        case name
+        case openJDKBuildNumber = "openjdk_build_number"
+    }
+}
+
 private struct PythonFtpRelease {
     let version: String
 
@@ -960,7 +1039,7 @@ public enum RuntimeComponentInstallerError: Error, LocalizedError {
         case .invalidJavaFeatureVersion(let version):
             return "Invalid JDK feature version: \(version)"
         case .javaCandidateNotFound(let version):
-            return "Temurin JDK is not available for this Mac: \(version)"
+            return "JDK is not available for this Mac from configured vendors: \(version)"
         case .invalidPythonVersion(let version):
             return "Invalid Python version: \(version)"
         case .pythonVersionNotFound(let version):

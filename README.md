@@ -18,7 +18,7 @@ ENVPilot 是一个 macOS 菜单栏工具，用于自管理 Node / JDK / Python �
   - 每个大版本只展示最新版本
   - 支持可视化安装 / 切换 / 卸载
 - JDK 版本管理
-  - 从 Adoptium Temurin 查询可安装版本
+  - 从 Temurin / Zulu 查询可安装版本
   - 支持仅 LTS 查询
   - 支持可视化安装 / 切换 / 卸载
   - 通过 `JAVA_HOME` 与 `PATH` 激活

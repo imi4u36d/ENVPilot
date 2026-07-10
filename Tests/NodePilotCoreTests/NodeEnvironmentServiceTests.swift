@@ -415,6 +415,30 @@ private final class MockInstaller: RuntimeComponentInstalling, @unchecked Sendab
     func uninstallManagedJava(homePath: String) throws {
         operations.append("uninstall-java:\(homePath)")
     }
+
+    func listAvailablePythonVersions(stableOnly: Bool) throws -> [PythonDownloadCandidate] {
+        [
+            PythonDownloadCandidate(
+                version: "3.13.5",
+                packageName: "Python-3.13.5.tgz",
+                downloadURL: "https://example.invalid/Python-3.13.5.tgz"
+            )
+        ]
+    }
+
+    func installPython(version: String, progress: (@Sendable (String) -> Void)?) throws -> PythonInstallation {
+        operations.append("install-python:\(version)")
+        let homePath = "/Users/me/.envpilot/runtimes/python/\(version)"
+        return PythonInstallation(
+            version: version,
+            homePath: homePath,
+            executablePath: "\(homePath)/bin/python3"
+        )
+    }
+
+    func uninstallManagedPython(homePath: String) throws {
+        operations.append("uninstall-python:\(homePath)")
+    }
 }
 
 private struct FailingInstaller: RuntimeComponentInstalling {
@@ -439,6 +463,18 @@ private struct FailingInstaller: RuntimeComponentInstalling {
     }
 
     func uninstallManagedJava(homePath: String) throws {
+        throw RuntimeComponentInstallerError.runtimeNotInstalled(path: homePath)
+    }
+
+    func listAvailablePythonVersions(stableOnly: Bool) throws -> [PythonDownloadCandidate] {
+        throw RuntimeComponentInstallerError.runtimeDownloadFailed(url: "python", message: "download failed")
+    }
+
+    func installPython(version: String, progress: (@Sendable (String) -> Void)?) throws -> PythonInstallation {
+        throw RuntimeComponentInstallerError.runtimeDownloadFailed(url: "python", message: "download failed")
+    }
+
+    func uninstallManagedPython(homePath: String) throws {
         throw RuntimeComponentInstallerError.runtimeNotInstalled(path: homePath)
     }
 }
