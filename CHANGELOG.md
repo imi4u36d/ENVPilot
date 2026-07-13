@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.5.0 - 2026-07-13
+
+### App UI
+
+- Added an app settings page for showing or hiding the ENVPilot menu bar entry.
+- Kept the main window available from the Dock when the menu bar entry is hidden.
+- Refreshed the README with clean application screenshots and updated installation, CLI, and development guidance.
+
+### Runtime Reliability and Security
+
+- Restricted runtime download URLs to HTTPS.
+- Added request and resource timeouts for runtime metadata and archive downloads.
+- Changed SHA-256 verification to stream large archives instead of loading them fully into memory.
+- Added archive path validation to reject absolute paths and parent-directory traversal before extraction.
+- Staged Python installations before replacing a managed runtime.
+- Made managed runtime replacement recover the previous installation when the final move fails.
+- Drained shell command stdout and stderr concurrently to prevent large-output deadlocks.
+- Centralized shell single-quote escaping across runtime detection, profile exports, activation scripts, and installers.
+
+### State Management and Tests
+
+- Returned updated runtime snapshots directly from mutating service operations to avoid redundant reloads.
+- Added installer safety, checksum, rollback, and shell output regression tests.
+- Added a project-local build-and-run entry point and Codex Run configuration.
+
 ## v0.3.0 - 2026-07-07
 
 ### Runtime Management
