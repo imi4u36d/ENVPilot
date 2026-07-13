@@ -231,6 +231,6 @@ public struct NodeInstallationDetector: NodeInstallationDetecting, Sendable {
     }
 
     public static func singleQuoted(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\"'\"'"))'"
+        ShellSyntax.singleQuoted(value)
     }
 }

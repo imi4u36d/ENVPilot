@@ -199,7 +199,7 @@ public struct JavaRuntimeDetector: JavaRuntimeDetecting, Sendable {
             return nil
         }
         let javaBin = homePath + "/bin/java"
-        let output = runShellOutput("\(Self.singleQuoted(javaBin)) -version 2>&1")
+        let output = runShellOutput("\(ShellSyntax.singleQuoted(javaBin)) -version 2>&1")
         return Self.parseJavaVersion(fromJavaVersionOutput: output)
     }
 
@@ -299,7 +299,4 @@ public struct JavaRuntimeDetector: JavaRuntimeDetecting, Sendable {
         return lhs > rhs
     }
 
-    static func singleQuoted(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\"'\"'"))'"
-    }
 }

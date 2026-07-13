@@ -4,6 +4,7 @@ import SwiftUI
 struct ENVPilotApp: App {
     @NSApplicationDelegateAdaptor(ENVPilotApplicationDelegate.self) private var appDelegate
     @StateObject private var store: NodeRuntimeStore
+    @AppStorage(AppPreferenceKey.showsMenuBarMenu) private var showsMenuBarMenu = true
 
     init() {
         let runtimeStore = NodeRuntimeStore(service: LocalNodeRuntimeService())
@@ -12,7 +13,7 @@ struct ENVPilotApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra {
+        MenuBarExtra(isInserted: $showsMenuBarMenu) {
             MenuBarContentView(store: store)
         } label: {
             Label(store.menuBarTitle, systemImage: "terminal.fill")

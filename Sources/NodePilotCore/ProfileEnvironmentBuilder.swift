@@ -44,7 +44,7 @@ public struct ProfileEnvironmentBuilder: Sendable {
             guard let value = variables[key] else {
                 return nil
             }
-            return "export \(key)=\(shellSingleQuoted(value))"
+            return "export \(key)=\(ShellSyntax.singleQuoted(value))"
         }
 
         return lines.joined(separator: "\n")
@@ -57,9 +57,5 @@ public struct ProfileEnvironmentBuilder: Sendable {
 
         let pattern = #"^[A-Za-z_][A-Za-z0-9_]*$"#
         return key.range(of: pattern, options: .regularExpression) != nil
-    }
-
-    private func shellSingleQuoted(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\"'\"'"))'"
     }
 }

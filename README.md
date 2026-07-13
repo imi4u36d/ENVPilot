@@ -1,130 +1,164 @@
 [![Release](https://img.shields.io/github/v/release/imi4u36d/ENVPilot?sort=semver)](https://github.com/imi4u36d/ENVPilot/releases)
-[![macOS](https://img.shields.io/badge/macOS-13%2B-111111)](https://github.com/imi4u36d/ENVPilot)
-[![Swift](https://img.shields.io/badge/Swift-6.2-F05138)](https://www.swift.org/)
+[![macOS](https://img.shields.io/badge/macOS-13%2B-111111?logo=apple)](https://github.com/imi4u36d/ENVPilot)
+[![Swift](https://img.shields.io/badge/Swift-6.2-F05138?logo=swift&logoColor=white)](https://www.swift.org/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 # ENVPilot
 
-ENVPilot 是一个 macOS 菜单栏工具，用于自管理 Node / JDK / Python 运行时，并按全局或项目配置切换开发环境。
+ENVPilot 是一款原生 macOS 开发环境管理工具。它统一管理 Node.js、JDK 和 Python 运行时，并根据全局设置或项目中的 `.envpilot` 文件自动生成终端环境。
 
-![ENVPilot main window](image.png)
+- 原生 SwiftUI 主窗口与可选菜单栏入口
+- 运行时由 ENVPilot 自主管理，不依赖 Homebrew、SDKMAN、nvm、fnm 或 pyenv
+- 同时提供图形界面、`envpilot-helper` 和简写命令 `ep`
+- 支持项目版本策略、环境预设和自定义环境变量
+
+## 应用界面
+
+### 环境预设
+
+为不同网络或项目维护 npm、pnpm、yarn registry、`NODE_OPTIONS` 与自定义环境变量。
+
+![ENVPilot 环境预设](docs/screenshots/profiles.png)
+
+### 应用设置
+
+菜单栏入口可以随时关闭；主窗口仍可从 Dock 打开并重新启用。
+
+![ENVPilot 应用设置](docs/screenshots/settings.png)
 
 ## 功能
 
-- 中文界面（菜单栏与设置页）
-- 自管理运行时，不依赖 Homebrew / SDKMAN / fnm / nvm / pyenv
-- Node 版本管理
-  - 从 Node 官方分发查询可安装版本
-  - 支持仅 LTS 查询
-  - 每个大版本只展示最新版本
-  - 支持可视化安装 / 切换 / 卸载
-- JDK 版本管理
-  - 从 Temurin / Zulu 查询可安装版本
-  - 支持仅 LTS 查询
-  - 支持可视化安装 / 切换 / 卸载
-  - 通过 `JAVA_HOME` 与 `PATH` 激活
-- Python 版本管理
-  - 从 Python 官方分发查询可安装版本
-  - 支持 Python 3.8+，每个 3.x 只展示最新 patch 版本
-  - 支持安装 / 切换 / 卸载 ENVPilot 管理的 CPython
-  - 通过 `ENVPILOT_PYTHON_HOME` 与 `PATH` 激活
-- 项目版本策略
-  - 支持 `.envpilot` 中的 `NODE_VERSION`
-  - 支持 `.envpilot` 中的 `JAVA_VERSION`
-  - 支持 `.envpilot` 中的 `PYTHON_VERSION`
-- Profile 环境配置
-  - `npm/pnpm/yarn registry`
-  - `NODE_OPTIONS`
-  - 自定义环境变量
+### 运行时管理
 
-## 构建
+- Node.js：从 Node 官方分发查询版本，支持 LTS 过滤、安装、切换和卸载。
+- JDK：从 Adoptium Temurin 与 Azul Zulu 查询版本，支持 LTS 过滤，并通过 `JAVA_HOME` 和 `PATH` 激活。
+- Python：从 Python 官方分发查询 Python 3.8+，安装 ENVPilot 管理的 CPython，并通过 `ENVPILOT_PYTHON_HOME` 和 `PATH` 激活。
+- 已安装运行时默认保存在 `~/.envpilot/runtimes`。
+- 下载支持进度显示；安装前执行归档路径检查，并使用暂存目录完成安全替换。
 
-```bash
-cd [你的项目路径]/ENVPilot
-swift build
+### 项目感知
+
+在项目根目录创建 `.envpilot`：
+
+```dotenv
+NODE_VERSION=24.18.0
+JAVA_VERSION=17
+PYTHON_VERSION=3.13.7
 ```
 
-## 打包 .app
+进入项目目录后，zsh 集成会向上查找最近的 `.envpilot` 文件并激活对应版本。你也可以在应用中切换为始终使用全局默认版本。
+
+### 环境预设
+
+每个预设可配置：
+
+- npm、pnpm、yarn registry
+- `NODE_OPTIONS`
+- 任意合法名称的自定义环境变量
+
+预设切换后会应用到新打开的终端。
+
+## 安装
+
+### 下载应用
+
+从 [Releases](https://github.com/imi4u36d/ENVPilot/releases) 下载最新构建。
+
+### 从源码一键安装
+
+要求 macOS 13 或更高版本，以及支持 Swift 6.2 的开发工具链。
 
 ```bash
-cd [你的项目路径]/ENVPilot
-./scripts/package_app.sh release
-```
-
-输出：
-
-```bash
-[你的项目路径]/ENVPilot/dist/ENVPilot.app
-[你的项目路径]/ENVPilot/dist/ENVPilot.dmg
-```
-
-## 本地一键安装（推荐）
-
-```bash
-cd [你的项目路径]/ENVPilot
+git clone https://github.com/imi4u36d/ENVPilot.git
+cd ENVPilot
 ./scripts/install_local.sh
 ```
 
-会自动安装：
+脚本会安装：
 
-- App 到 `~/Applications/ENVPilot.app`
-- Helper 到 `~/.local/bin/envpilot-helper`
-- zsh 自动激活片段到 `~/.zshrc`
+- `~/Applications/ENVPilot.app`
+- `~/.local/bin/envpilot-helper`
+- `~/.local/bin/ep`
+- `~/.zshrc` 中带有 ENVPilot 标记的自动激活片段
 
-## 运行 App
-
-```bash
-cd [你的项目路径]/ENVPilot
-swift run ENVPilotApp
-```
-
-## Helper 命令
+安装完成后重新打开终端，或执行：
 
 ```bash
-envpilot-helper status [--cwd <path>] [--format text|json] [--fields <k1,k2>] [--include-profile]
-envpilot-helper doctor [--format text|json] [--check <id>]
-envpilot-helper available <n|node|j|java|jdk|py|python> [--format text|json] [--lts]
-envpilot-helper install-node <version> [--dry-run]
-envpilot-helper install-jdk <feature-version> [--dry-run]
-envpilot-helper install-python <version> [--dry-run]
-envpilot-helper set-version <version> [--dry-run]
-envpilot-helper set-jdk <version-or-home-path> [--dry-run]
-envpilot-helper set-python <version-or-home-path> [--dry-run]
-envpilot-helper set-profile <profile-name-or-id> [--dry-run]
-envpilot-helper list [n|node|j|java|py|python] [--format text|json]
-envpilot-helper use n <version> [--cwd <path>]
-envpilot-helper use j <version> [--cwd <path>]
-envpilot-helper use py <version> [--cwd <path>]
-envpilot-helper profile list [--format text|json]
-envpilot-helper profile get <profile-id|name> [--format text|json]
-envpilot-helper profile create <name> [--format text|json] [--select] [--dry-run]
-envpilot-helper profile select <profile-id|name> [--format text|json] [--dry-run]
-envpilot-helper profile delete <profile-id|name> [--force] [--dry-run]
-envpilot-helper profile rename <profile-id|name> <new-name> [--dry-run]
-envpilot-helper profile set <profile-id|name> [--npm-registry <url>] [--pnpm-registry <url>] [--yarn-registry <url>] [--node-options <value>] [--format text|json] [--dry-run]
-envpilot-helper profile var set <profile-id|name> <KEY> <VALUE> [--dry-run]
-envpilot-helper profile var unset <profile-id|name> <KEY> [--dry-run]
-envpilot-helper profile var list <profile-id|name> [--format text|json]
-envpilot-helper config get <project-version-preference|selected-version|selected-java-version|selected-java-home|selected-python-version|selected-python-home|selected-profile-id|selected-profile-name>
-envpilot-helper config set project-version-preference <globalDefault|followProjectFiles>
-envpilot-helper config set selected-version <version|none>
-envpilot-helper config set selected-profile <profile-id|name|none>
-envpilot-helper config set selected-java <version-or-home-path|none>
-envpilot-helper config set selected-python <version-or-home-path|none>
-envpilot-helper activate [--cwd <path>] [--format text|json]
-envpilot-helper install-snippet [--helper-path <path>] [--format text|json]
+source ~/.zshrc
+open ~/Applications/ENVPilot.app
 ```
+
+## 常用命令
+
+```bash
+# 查看当前环境与诊断结果
+ep status
+ep doctor
+
+# 查询和安装运行时
+ep available node --lts
+ep available jdk --lts
+ep available python
+ep install-node 22.17.0
+ep install-jdk 21
+ep install-python 3.13.7
+
+# 写入当前项目的 .envpilot
+ep use n 22.17.0
+ep use j 21
+ep use py 3.13.7
+
+# 管理环境预设
+ep profile list
+ep profile create "公司网络" --select
+ep profile set "公司网络" --npm-registry https://registry.example.com
+ep profile var set "公司网络" HTTPS_PROXY http://127.0.0.1:7890
+
+# 输出完整帮助
+ep help
+```
+
+多数查询命令支持 `--format json`，修改命令支持 `--dry-run`。完整命令以 `ep help` 输出为准。
+
+## 构建与开发
+
+```bash
+# 构建全部目标
+swift build
+
+# 运行测试
+swift test
+
+# 构建、打包并验证本地应用进程
+./script/build_and_run.sh --verify
+
+# 生成发布版 app 与 dmg
+./scripts/package_app.sh release
+```
+
+打包产物位于：
+
+```text
+dist/ENVPilot.app
+dist/ENVPilot.dmg
+```
+
+项目包含三个 SwiftPM 产品：
+
+- `ENVPilotApp`：SwiftUI macOS 应用
+- `ENVPilotCore`：运行时检测、安装、配置与 shell 集成
+- `envpilot-helper`：终端 CLI，安装后同时提供 `ep` 符号链接
 
 ## zsh 集成
 
-手动输出并安装 snippet：
+如需单独安装或更新 shell 片段：
 
 ```bash
-[你的项目路径]/ENVPilot/.build/debug/envpilot-helper install-snippet --helper-path [你的项目路径]/ENVPilot/.build/debug/envpilot-helper
+./scripts/install_zsh_integration.sh release ~/.local/bin/envpilot-helper
 ```
 
-或者使用脚本：
+生成的片段由 `# >>> ENVPilot >>>` 和 `# <<< ENVPilot <<<` 包围，可重复执行安装脚本安全更新。
 
-```bash
-cd [你的项目路径]/ENVPilot
-./scripts/install_zsh_integration.sh release [你的项目路径]/ENVPilot/.build/release/envpilot-helper
-```
+## 许可证
+
+[Apache License 2.0](LICENSE)

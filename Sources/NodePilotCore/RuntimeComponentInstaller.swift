@@ -201,33 +201,33 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
         }
 
         let target = Self.managedPythonRoot().appendingPathComponent(resolvedVersion, isDirectory: true)
-        if FileManager.default.fileExists(atPath: target.path) {
-            try FileManager.default.removeItem(at: target)
-        }
-        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let stagingRoot = workDirectory.appendingPathComponent("install-root", isDirectory: true)
+        let relativeTargetPath = target.path.drop(while: { $0 == "/" })
+        let stagingTarget = stagingRoot.appendingPathComponent(String(relativeTargetPath), isDirectory: true)
 
         progress?("正在安装 Python \(resolvedVersion)：配置 65%")
         try runPythonBuildCommand(
-            "cd \(Self.shellSingleQuoted(sourceDirectory.path)) && ./configure --prefix=\(Self.shellSingleQuoted(target.path)) --enable-shared",
+            "cd \(ShellSyntax.singleQuoted(sourceDirectory.path)) && ./configure --prefix=\(ShellSyntax.singleQuoted(target.path)) --enable-shared",
             stage: "配置 Python \(resolvedVersion)"
         )
 
         progress?("正在安装 Python \(resolvedVersion)：编译 75%")
         try runPythonBuildCommand(
-            "cd \(Self.shellSingleQuoted(sourceDirectory.path)) && /usr/bin/make -j\(Self.processorCount)",
+            "cd \(ShellSyntax.singleQuoted(sourceDirectory.path)) && /usr/bin/make -j\(Self.processorCount)",
             stage: "编译 Python \(resolvedVersion)"
         )
 
         progress?("正在安装 Python \(resolvedVersion)：写入 95%")
         try runPythonBuildCommand(
-            "cd \(Self.shellSingleQuoted(sourceDirectory.path)) && /usr/bin/make install",
+            "cd \(ShellSyntax.singleQuoted(sourceDirectory.path)) && /usr/bin/make install DESTDIR=\(ShellSyntax.singleQuoted(stagingRoot.path))",
             stage: "安装 Python \(resolvedVersion)"
         )
 
-        guard FileManager.default.isExecutableFile(atPath: target.appendingPathComponent("bin/python3").path) else {
+        guard FileManager.default.isExecutableFile(atPath: stagingTarget.appendingPathComponent("bin/python3").path) else {
             throw RuntimeComponentInstallerError.runtimeArchiveInvalid(message: "Python install did not contain bin/python3.")
         }
 
+        try replaceManagedDirectory(source: stagingTarget, target: target)
         let installedVersion = versionFromPythonHome(target.path) ?? resolvedVersion
         progress?("Python \(installedVersion) 安装完成 100%")
         return PythonInstallation(
@@ -492,7 +492,8 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
     func fetchData(from url: URL) throws -> Data {
         let semaphore = DispatchSemaphore(value: 0)
         let state = RuntimeDownloadState<Data>()
-        URLSession.shared.dataTask(with: url) { data, response, error in
+        let request = URLRequest(url: url, timeoutInterval: 60)
+        URLSession.shared.dataTask(with: request) { data, response, error in
             state.complete(Self.validateDownloadedData(data: data, response: response, error: error, url: url))
             semaphore.signal()
         }.resume()
@@ -519,7 +520,10 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
         }
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = 1
-        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: queue)
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 60
+        configuration.timeoutIntervalForResource = 21_600
+        let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: queue)
         session.downloadTask(with: url).resume()
         semaphore.wait()
         session.finishTasksAndInvalidate()
@@ -556,14 +560,30 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
     }
 
     func verifySHA256(fileURL: URL, expectedHex: String) throws {
-        let data = try Data(contentsOf: fileURL)
-        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let fileHandle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? fileHandle.close() }
+
+        var hasher = SHA256()
+        while let data = try fileHandle.read(upToCount: 1_048_576), !data.isEmpty {
+            hasher.update(data: data)
+        }
+        let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
         guard digest.lowercased() == expectedHex.lowercased() else {
             throw RuntimeComponentInstallerError.runtimeChecksumMismatch(file: fileURL.lastPathComponent)
         }
     }
 
     func extractArchive(_ archiveURL: URL, to destination: URL) throws {
+        let listing = try shellRunner.run(
+            "/usr/bin/tar",
+            arguments: ["-tf", archiveURL.path],
+            environment: environment
+        )
+        guard listing.succeeded else {
+            throw RuntimeComponentInstallerError.runtimeArchiveInvalid(message: preferErrorOutput(listing))
+        }
+        try validateArchiveEntries(listing.standardOutput)
+
         let result = try shellRunner.run(
             "/usr/bin/tar",
             arguments: ["-xf", archiveURL.path, "-C", destination.path],
@@ -574,13 +594,43 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
         }
     }
 
+    func validateArchiveEntries(_ listing: String) throws {
+        for rawEntry in listing.split(whereSeparator: \.isNewline) {
+            let entry = String(rawEntry)
+            let components = entry.split(separator: "/", omittingEmptySubsequences: false)
+            if entry.hasPrefix("/") || components.contains("..") {
+                throw RuntimeComponentInstallerError.runtimeArchiveInvalid(
+                    message: "Archive contains an unsafe path: \(entry)"
+                )
+            }
+        }
+    }
+
     func replaceManagedDirectory(source: URL, target: URL) throws {
         let fileManager = FileManager.default
-        try fileManager.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if fileManager.fileExists(atPath: target.path) {
-            try fileManager.removeItem(at: target)
+        let parent = target.deletingLastPathComponent()
+        let backup = parent.appendingPathComponent(".\(target.lastPathComponent).backup-\(UUID().uuidString)", isDirectory: true)
+        let hadExistingTarget = fileManager.fileExists(atPath: target.path)
+
+        try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+        if hadExistingTarget {
+            try fileManager.moveItem(at: target, to: backup)
         }
-        try fileManager.moveItem(at: source, to: target)
+
+        do {
+            try fileManager.moveItem(at: source, to: target)
+        } catch {
+            if hadExistingTarget,
+               fileManager.fileExists(atPath: backup.path),
+               !fileManager.fileExists(atPath: target.path) {
+                try? fileManager.moveItem(at: backup, to: target)
+            }
+            throw error
+        }
+
+        if hadExistingTarget {
+            try? fileManager.removeItem(at: backup)
+        }
     }
 
     func findJavaHome(in root: URL) -> URL? {
@@ -719,14 +769,10 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
     }
 
     static func url(_ value: String) throws -> URL {
-        guard let url = URL(string: value) else {
+        guard let url = URL(string: value), url.scheme == "https", url.host != nil else {
             throw RuntimeComponentInstallerError.invalidDownloadURL(value)
         }
         return url
-    }
-
-    static func shellSingleQuoted(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\"'\"'"))'"
     }
 
     static var processorCount: Int {

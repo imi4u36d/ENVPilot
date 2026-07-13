@@ -101,7 +101,6 @@ final class NodeRuntimeStore: ObservableObject {
         let succeeded = await runOperation(message: "正在切换 Node \(version)...") { [self] in
             try await self.runBackground { [service] in
                 try service.setDefaultNode(version: version, progress: progress)
-                return try service.loadSnapshot(progress: progress)
             }
         } onError: { error in
             "设置 Node 版本失败：\(error.localizedDescription)"
@@ -116,7 +115,6 @@ final class NodeRuntimeStore: ObservableObject {
         let succeeded = await runOperation(message: "正在安装 Node \(version)...") { [self] in
             try await self.runBackground { [service] in
                 try service.installNode(version: version, progress: progress)
-                return try service.loadSnapshot(progress: progress)
             }
         } onError: { error in
             "安装 Node 版本失败：\(error.localizedDescription)"
@@ -150,7 +148,6 @@ final class NodeRuntimeStore: ObservableObject {
         let succeeded = await runOperation(message: "正在卸载 Node \(version)...") { [self] in
             try await self.runBackground { [service] in
                 try service.uninstallNode(version: version, progress: progress)
-                return try service.loadSnapshot(progress: progress)
             }
         } onError: { error in
             "卸载 Node 版本失败：\(error.localizedDescription)"
@@ -164,7 +161,6 @@ final class NodeRuntimeStore: ObservableObject {
         let succeeded = await runOperation(message: "正在切换 JDK \(version)...") { [self] in
             try await self.runBackground { [service] in
                 try service.setDefaultJava(version: version, homePath: homePath)
-                return try service.loadSnapshot(progress: nil)
             }
         } onError: { error in
             "设置 JDK 版本失败：\(error.localizedDescription)"
@@ -179,7 +175,6 @@ final class NodeRuntimeStore: ObservableObject {
         let succeeded = await runOperation(message: "正在安装 JDK \(featureVersion)...") { [self] in
             try await self.runBackground { [service] in
                 try service.installJava(featureVersion: featureVersion, progress: progress)
-                return try service.loadSnapshot(progress: progress)
             }
         } onError: { error in
             "安装 JDK 失败：\(error.localizedDescription)"
@@ -212,7 +207,6 @@ final class NodeRuntimeStore: ObservableObject {
         let succeeded = await runOperation(message: "正在切换 Python \(version)...") { [self] in
             try await self.runBackground { [service] in
                 try service.setDefaultPython(version: version, homePath: homePath)
-                return try service.loadSnapshot(progress: nil)
             }
         } onError: { error in
             "设置 Python 版本失败：\(error.localizedDescription)"
@@ -227,7 +221,6 @@ final class NodeRuntimeStore: ObservableObject {
         let succeeded = await runOperation(message: "正在安装 Python \(version)...") { [self] in
             try await self.runBackground { [service] in
                 try service.installPython(version: version, progress: progress)
-                return try service.loadSnapshot(progress: progress)
             }
         } onError: { error in
             "安装 Python 失败：\(error.localizedDescription)"
@@ -267,7 +260,6 @@ final class NodeRuntimeStore: ObservableObject {
         let succeeded = await runOperation(message: "正在卸载 JDK \(version)...") { [self] in
             try await self.runBackground { [service] in
                 try service.uninstallJava(homePath: homePath, progress: progress)
-                return try service.loadSnapshot(progress: progress)
             }
         } onError: { error in
             "卸载 JDK 失败：\(error.localizedDescription)"
@@ -282,7 +274,6 @@ final class NodeRuntimeStore: ObservableObject {
         let succeeded = await runOperation(message: "正在卸载 Python \(version)...") { [self] in
             try await self.runBackground { [service] in
                 try service.uninstallPython(homePath: homePath, progress: progress)
-                return try service.loadSnapshot(progress: progress)
             }
         } onError: { error in
             "卸载 Python 失败：\(error.localizedDescription)"
@@ -296,7 +287,6 @@ final class NodeRuntimeStore: ObservableObject {
         let succeeded = await runOperation(message: "正在切换环境预设...") { [self] in
             try await self.runBackground { [service] in
                 try service.setSelectedProfile(id: id)
-                return try service.loadSnapshot(progress: nil)
             }
         } onError: { error in
             "切换环境预设失败：\(error.localizedDescription)"
@@ -312,7 +302,6 @@ final class NodeRuntimeStore: ObservableObject {
         let succeeded = await runOperation(message: "正在保存环境预设...") { [self] in
             try await self.runBackground { [service] in
                 try service.saveProfile(profile)
-                return try service.loadSnapshot(progress: nil)
             }
         } onError: { error in
             "保存环境预设失败：\(error.localizedDescription)"
@@ -326,8 +315,7 @@ final class NodeRuntimeStore: ObservableObject {
     func createProfile(named name: String) async {
         let succeeded = await runOperation(message: "正在创建环境预设...") { [self] in
             try await self.runBackground { [service] in
-                _ = try service.createProfile(named: name)
-                return try service.loadSnapshot(progress: nil)
+                try service.createProfile(named: name)
             }
         } onError: { error in
             "创建环境预设失败：\(error.localizedDescription)"
@@ -341,7 +329,6 @@ final class NodeRuntimeStore: ObservableObject {
         await runOperation(message: "正在更新项目版本策略...") { [self] in
             try await self.runBackground { [service] in
                 try service.setProjectVersionPreference(preference)
-                return try service.loadSnapshot(progress: nil)
             }
         } onError: { error in
             "更新项目版本策略失败：\(error.localizedDescription)"

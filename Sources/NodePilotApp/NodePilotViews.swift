@@ -303,6 +303,10 @@ struct SettingsView: View {
                 sidebarItem(.project)
                 sidebarItem(.profiles)
             }
+
+            Section("应用") {
+                sidebarItem(.settings)
+            }
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
@@ -348,7 +352,7 @@ struct SettingsView: View {
                 SettingsDetailHeader(
                     section: selectedSection ?? .overview,
                     isLoading: store.isLoading,
-                    refreshAction: { Task { await store.refresh() } }
+                    refreshAction: selectedSection == .settings ? nil : { Task { await store.refresh() } }
                 )
 
                 if let message = store.latestError {
@@ -382,6 +386,8 @@ struct SettingsView: View {
             projectSection
         case .profiles:
             profilesSection
+        case .settings:
+            AppSettingsView()
         }
     }
 
@@ -1372,7 +1378,7 @@ private struct LiquidGlassGroupBoxStyle: GroupBoxStyle {
 private struct SettingsDetailHeader: View {
     let section: SettingsSection
     let isLoading: Bool
-    let refreshAction: () -> Void
+    let refreshAction: (() -> Void)?
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
@@ -1392,21 +1398,23 @@ private struct SettingsDetailHeader: View {
 
             Spacer()
 
-            if isLoading {
-                ProgressView()
-                    .controlSize(.small)
-            }
+            if let refreshAction {
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                }
 
-            Button {
-                refreshAction()
-            } label: {
-                Label("刷新", systemImage: "arrow.clockwise")
+                Button {
+                    refreshAction()
+                } label: {
+                    Label("刷新", systemImage: "arrow.clockwise")
+                }
+                .controlSize(.regular)
+                .buttonStyle(.bordered)
+                .keyboardShortcut("r", modifiers: .command)
+                .help("刷新运行时信息")
+                .disabled(isLoading)
             }
-            .controlSize(.regular)
-            .buttonStyle(.bordered)
-            .keyboardShortcut("r", modifiers: .command)
-            .help("刷新运行时信息")
-            .disabled(isLoading)
         }
         .padding(.bottom, 4)
     }
@@ -1419,6 +1427,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     case python
     case project
     case profiles
+    case settings
 
     var id: String {
         rawValue
@@ -1438,6 +1447,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
             return "项目环境"
         case .profiles:
             return "环境预设"
+        case .settings:
+            return "设置"
         }
     }
 
@@ -1455,6 +1466,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
             return "查看并配置进入项目目录时的版本选择规则。"
         case .profiles:
             return "管理 registry、NODE_OPTIONS 与自定义环境变量预设。"
+        case .settings:
+            return "配置 ENVPilot 的应用行为与系统集成。"
         }
     }
 
@@ -1472,6 +1485,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
             return "folder.badge.gearshape"
         case .profiles:
             return "slider.horizontal.3"
+        case .settings:
+            return "gearshape"
         }
     }
 }

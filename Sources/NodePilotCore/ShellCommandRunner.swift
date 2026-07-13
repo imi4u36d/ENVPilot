@@ -36,19 +36,51 @@ public struct ShellCommandRunner: ShellCommandRunning, Sendable {
         process.standardError = stderrPipe
 
         try process.run()
+        let stdoutReader = ConcurrentPipeReader(
+            fileHandle: stdoutPipe.fileHandleForReading,
+            label: "envpilot.shell-command.stdout"
+        )
+        let stderrReader = ConcurrentPipeReader(
+            fileHandle: stderrPipe.fileHandleForReading,
+            label: "envpilot.shell-command.stderr"
+        )
+        stdoutReader.start()
+        stderrReader.start()
         process.waitUntilExit()
 
-        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-
         return ShellCommandResult(
-            standardOutput: String(decoding: stdoutData, as: UTF8.self),
-            standardError: String(decoding: stderrData, as: UTF8.self),
+            standardOutput: String(decoding: stdoutReader.result(), as: UTF8.self),
+            standardError: String(decoding: stderrReader.result(), as: UTF8.self),
             exitCode: process.terminationStatus
         )
     }
 
     public func runShell(_ command: String, environment: [String: String] = ProcessInfo.processInfo.environment) throws -> ShellCommandResult {
         try run("/bin/zsh", arguments: ["-lc", command], environment: environment)
+    }
+}
+
+private final class ConcurrentPipeReader: @unchecked Sendable {
+    private let fileHandle: FileHandle
+    private let queue: DispatchQueue
+    private let group = DispatchGroup()
+    private var data = Data()
+
+    init(fileHandle: FileHandle, label: String) {
+        self.fileHandle = fileHandle
+        self.queue = DispatchQueue(label: label, qos: .userInitiated)
+    }
+
+    func start() {
+        group.enter()
+        queue.async { [self] in
+            data = fileHandle.readDataToEndOfFile()
+            group.leave()
+        }
+    }
+
+    func result() -> Data {
+        group.wait()
+        return data
     }
 }

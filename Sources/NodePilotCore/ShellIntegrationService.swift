@@ -94,37 +94,37 @@ public struct ShellIntegrationService {
         let profile = selectedProfile(in: settings)
 
         if let effectiveVersion {
-            lines.append("export ENVPILOT_EFFECTIVE_NODE_VERSION=\(shellSingleQuoted(effectiveVersion))")
+            lines.append("export ENVPILOT_EFFECTIVE_NODE_VERSION=\(ShellSyntax.singleQuoted(effectiveVersion))")
         }
         if let effectiveNodeInstallation {
-            lines.append("export ENVPILOT_NODE_HOME=\(shellSingleQuoted(effectiveNodeInstallation.installPath))")
+            lines.append("export ENVPILOT_NODE_HOME=\(ShellSyntax.singleQuoted(effectiveNodeInstallation.installPath))")
             lines.append("export PATH=\"$ENVPILOT_NODE_HOME/bin:$PATH\"")
         } else if let effectiveVersion, !effectiveVersion.isEmpty {
             lines.append("unset ENVPILOT_NODE_HOME")
-            lines.append("echo \(shellSingleQuoted("ENVPilot: 未找到 Node \(effectiveVersion)，请在 ENVPilot 中刷新运行时缓存。")) >&2")
+            lines.append("echo \(ShellSyntax.singleQuoted("ENVPilot: 未找到 Node \(effectiveVersion)，请在 ENVPilot 中刷新运行时缓存。")) >&2")
         }
         if let profile {
-            lines.append("export ENVPILOT_ACTIVE_PROFILE=\(shellSingleQuoted(profile.name))")
+            lines.append("export ENVPILOT_ACTIVE_PROFILE=\(ShellSyntax.singleQuoted(profile.name))")
         }
         if let effectiveJavaVersion, !effectiveJavaVersion.isEmpty {
-            lines.append("export ENVPILOT_EFFECTIVE_JAVA_VERSION=\(shellSingleQuoted(effectiveJavaVersion))")
+            lines.append("export ENVPILOT_EFFECTIVE_JAVA_VERSION=\(ShellSyntax.singleQuoted(effectiveJavaVersion))")
         }
         if let effectiveJavaInstallation {
-            lines.append("export JAVA_HOME=\(shellSingleQuoted(effectiveJavaInstallation.homePath))")
+            lines.append("export JAVA_HOME=\(ShellSyntax.singleQuoted(effectiveJavaInstallation.homePath))")
             lines.append("export PATH=\"$JAVA_HOME/bin:$PATH\"")
         } else if let effectiveJavaVersion, !effectiveJavaVersion.isEmpty {
             lines.append("unset JAVA_HOME")
-            lines.append("echo \(shellSingleQuoted("ENVPilot: 未找到 JDK \(effectiveJavaVersion)，请在 ENVPilot 中刷新运行时缓存。")) >&2")
+            lines.append("echo \(ShellSyntax.singleQuoted("ENVPilot: 未找到 JDK \(effectiveJavaVersion)，请在 ENVPilot 中刷新运行时缓存。")) >&2")
         }
         if let effectivePythonVersion, !effectivePythonVersion.isEmpty {
-            lines.append("export ENVPILOT_EFFECTIVE_PYTHON_VERSION=\(shellSingleQuoted(effectivePythonVersion))")
+            lines.append("export ENVPILOT_EFFECTIVE_PYTHON_VERSION=\(ShellSyntax.singleQuoted(effectivePythonVersion))")
         }
         if let effectivePythonInstallation {
-            lines.append("export ENVPILOT_PYTHON_HOME=\(shellSingleQuoted(effectivePythonInstallation.homePath))")
+            lines.append("export ENVPILOT_PYTHON_HOME=\(ShellSyntax.singleQuoted(effectivePythonInstallation.homePath))")
             lines.append("export PATH=\"$ENVPILOT_PYTHON_HOME/bin:$PATH\"")
         } else if let effectivePythonVersion, !effectivePythonVersion.isEmpty {
             lines.append("unset ENVPILOT_PYTHON_HOME")
-            lines.append("echo \(shellSingleQuoted("ENVPilot: 未找到 Python \(effectivePythonVersion)，请在 ENVPilot 中刷新运行时缓存。")) >&2")
+            lines.append("echo \(ShellSyntax.singleQuoted("ENVPilot: 未找到 Python \(effectivePythonVersion)，请在 ENVPilot 中刷新运行时缓存。")) >&2")
         }
 
         let exports = profileBuilder.renderExportScript(from: profile)
@@ -282,7 +282,7 @@ public struct ShellIntegrationService {
             explicitHelperPath = "envpilot-helper"
         }
 
-        let quotedPath = shellSingleQuoted(explicitHelperPath)
+        let quotedPath = ShellSyntax.singleQuoted(explicitHelperPath)
         return """
         # >>> ENVPilot >>>
         envpilot_auto_activate() {
@@ -311,10 +311,6 @@ public struct ShellIntegrationService {
         envpilot_auto_activate
         # <<< ENVPilot <<<
         """
-    }
-
-    private func shellSingleQuoted(_ text: String) -> String {
-        "'\(text.replacingOccurrences(of: "'", with: "'\"'\"'"))'"
     }
 
     private func standardizedPath(_ path: String) -> String {

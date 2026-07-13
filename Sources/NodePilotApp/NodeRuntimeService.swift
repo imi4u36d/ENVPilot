@@ -6,19 +6,19 @@ protocol NodeRuntimeServicing: Sendable {
     func listAvailableNodeVersions(ltsOnly: Bool) throws -> [NodeDownloadCandidate]
     func listAvailableJavaVersions(ltsOnly: Bool) throws -> [JavaDownloadCandidate]
     func listAvailablePythonVersions(stableOnly: Bool) throws -> [PythonDownloadCandidate]
-    func setDefaultNode(version: String, progress: (@Sendable (String) -> Void)?) throws
-    func installNode(version: String, progress: (@Sendable (String) -> Void)?) throws
-    func uninstallNode(version: String, progress: (@Sendable (String) -> Void)?) throws
-    func installJava(featureVersion: Int, progress: (@Sendable (String) -> Void)?) throws
-    func uninstallJava(homePath: String, progress: (@Sendable (String) -> Void)?) throws
-    func setDefaultJava(version: String, homePath: String) throws
-    func installPython(version: String, progress: (@Sendable (String) -> Void)?) throws
-    func uninstallPython(homePath: String, progress: (@Sendable (String) -> Void)?) throws
-    func setDefaultPython(version: String, homePath: String) throws
-    func setSelectedProfile(id: UUID) throws
-    func saveProfile(_ profile: EnvironmentProfile) throws
-    func createProfile(named name: String) throws -> UUID
-    func setProjectVersionPreference(_ preference: ProjectVersionPreference) throws
+    func setDefaultNode(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
+    func installNode(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
+    func uninstallNode(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
+    func installJava(featureVersion: Int, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
+    func uninstallJava(homePath: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
+    func setDefaultJava(version: String, homePath: String) throws -> NodeRuntimeSnapshot
+    func installPython(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
+    func uninstallPython(homePath: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
+    func setDefaultPython(version: String, homePath: String) throws -> NodeRuntimeSnapshot
+    func setSelectedProfile(id: UUID) throws -> NodeRuntimeSnapshot
+    func saveProfile(_ profile: EnvironmentProfile) throws -> NodeRuntimeSnapshot
+    func createProfile(named name: String) throws -> NodeRuntimeSnapshot
+    func setProjectVersionPreference(_ preference: ProjectVersionPreference) throws -> NodeRuntimeSnapshot
 }
 
 struct LocalNodeRuntimeService: NodeRuntimeServicing {
@@ -52,47 +52,47 @@ struct LocalNodeRuntimeService: NodeRuntimeServicing {
         try environmentService.listAvailablePythonVersions(stableOnly: stableOnly)
     }
 
-    func setDefaultNode(version: String, progress: (@Sendable (String) -> Void)? = nil) throws {
-        _ = try environmentService.selectDefaultNode(version: version, progress: progress)
+    func setDefaultNode(version: String, progress: (@Sendable (String) -> Void)? = nil) throws -> NodeRuntimeSnapshot {
+        try environmentService.selectDefaultNode(version: version, progress: progress)
     }
 
-    func installNode(version: String, progress: (@Sendable (String) -> Void)? = nil) throws {
-        _ = try environmentService.installNode(version: version, progress: progress)
+    func installNode(version: String, progress: (@Sendable (String) -> Void)? = nil) throws -> NodeRuntimeSnapshot {
+        try environmentService.installNode(version: version, progress: progress)
     }
 
-    func uninstallNode(version: String, progress: (@Sendable (String) -> Void)? = nil) throws {
-        _ = try environmentService.uninstallNode(version: version, progress: progress)
+    func uninstallNode(version: String, progress: (@Sendable (String) -> Void)? = nil) throws -> NodeRuntimeSnapshot {
+        try environmentService.uninstallNode(version: version, progress: progress)
     }
 
-    func installJava(featureVersion: Int, progress: (@Sendable (String) -> Void)? = nil) throws {
-        _ = try environmentService.installJava(featureVersion: featureVersion, progress: progress)
+    func installJava(featureVersion: Int, progress: (@Sendable (String) -> Void)? = nil) throws -> NodeRuntimeSnapshot {
+        try environmentService.installJava(featureVersion: featureVersion, progress: progress)
     }
 
-    func uninstallJava(homePath: String, progress: (@Sendable (String) -> Void)? = nil) throws {
-        _ = try environmentService.uninstallJava(homePath: homePath, progress: progress)
+    func uninstallJava(homePath: String, progress: (@Sendable (String) -> Void)? = nil) throws -> NodeRuntimeSnapshot {
+        try environmentService.uninstallJava(homePath: homePath, progress: progress)
     }
 
-    func setDefaultJava(version: String, homePath: String) throws {
-        _ = try environmentService.selectDefaultJava(version: version, homePath: homePath)
+    func setDefaultJava(version: String, homePath: String) throws -> NodeRuntimeSnapshot {
+        try environmentService.selectDefaultJava(version: version, homePath: homePath)
     }
 
-    func installPython(version: String, progress: (@Sendable (String) -> Void)? = nil) throws {
-        _ = try environmentService.installPython(version: version, progress: progress)
+    func installPython(version: String, progress: (@Sendable (String) -> Void)? = nil) throws -> NodeRuntimeSnapshot {
+        try environmentService.installPython(version: version, progress: progress)
     }
 
-    func uninstallPython(homePath: String, progress: (@Sendable (String) -> Void)? = nil) throws {
-        _ = try environmentService.uninstallPython(homePath: homePath, progress: progress)
+    func uninstallPython(homePath: String, progress: (@Sendable (String) -> Void)? = nil) throws -> NodeRuntimeSnapshot {
+        try environmentService.uninstallPython(homePath: homePath, progress: progress)
     }
 
-    func setDefaultPython(version: String, homePath: String) throws {
-        _ = try environmentService.selectDefaultPython(version: version, homePath: homePath)
+    func setDefaultPython(version: String, homePath: String) throws -> NodeRuntimeSnapshot {
+        try environmentService.selectDefaultPython(version: version, homePath: homePath)
     }
 
-    func setSelectedProfile(id: UUID) throws {
-        _ = try environmentService.updateSelectedProfile(id)
+    func setSelectedProfile(id: UUID) throws -> NodeRuntimeSnapshot {
+        try environmentService.updateSelectedProfile(id)
     }
 
-    func saveProfile(_ profile: EnvironmentProfile) throws {
+    func saveProfile(_ profile: EnvironmentProfile) throws -> NodeRuntimeSnapshot {
         var settings = try configStore.load()
         if let index = settings.profiles.firstIndex(where: { $0.id == profile.id }) {
             settings.profiles[index] = profile
@@ -103,9 +103,10 @@ struct LocalNodeRuntimeService: NodeRuntimeServicing {
             settings.selectedProfileID = profile.id
         }
         try configStore.save(settings)
+        return try environmentService.loadSnapshot()
     }
 
-    func createProfile(named name: String) throws -> UUID {
+    func createProfile(named name: String) throws -> NodeRuntimeSnapshot {
         var settings = try configStore.load()
         let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let base = normalized.isEmpty ? "新配置" : normalized
@@ -114,13 +115,14 @@ struct LocalNodeRuntimeService: NodeRuntimeServicing {
         settings.profiles.append(profile)
         settings.selectedProfileID = profile.id
         try configStore.save(settings)
-        return profile.id
+        return try environmentService.loadSnapshot()
     }
 
-    func setProjectVersionPreference(_ preference: ProjectVersionPreference) throws {
+    func setProjectVersionPreference(_ preference: ProjectVersionPreference) throws -> NodeRuntimeSnapshot {
         var settings = try configStore.load()
         settings.projectVersionPreference = preference
         try configStore.save(settings)
+        return try environmentService.loadSnapshot()
     }
 
     private func uniqueProfileName(base: String, existing: [String]) -> String {

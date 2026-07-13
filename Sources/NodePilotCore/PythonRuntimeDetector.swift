@@ -84,7 +84,7 @@ public struct PythonRuntimeDetector: PythonRuntimeDetecting, Sendable {
         guard FileManager.default.isExecutableFile(atPath: pythonBin) else {
             return nil
         }
-        return Self.normalizeVersion(runShellOutput("\(Self.singleQuoted(pythonBin)) --version 2>&1"))
+        return Self.normalizeVersion(runShellOutput("\(ShellSyntax.singleQuoted(pythonBin)) --version 2>&1"))
     }
 
     private func runShellOutput(_ command: String) -> String {
@@ -144,7 +144,4 @@ public struct PythonRuntimeDetector: PythonRuntimeDetecting, Sendable {
         return false
     }
 
-    static func singleQuoted(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\"'\"'"))'"
-    }
 }
