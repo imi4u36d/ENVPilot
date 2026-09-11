@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.5.1 - 2026-09-11
+
+### JDK Discovery and Installation
+
+- Managed JDK installs now keep the full macOS `.jdk` bundle layout (`Contents/Info.plist`, `Contents/MacOS`) instead of extracting only `Contents/Home`, which previously produced bundles that `/usr/libexec/java_home` and other standard tooling could not enumerate.
+- Added a symbolic-link discovery entry under `~/Library/Java/JavaVirtualMachines` pointing at the managed runtime, created on install and removed on uninstall. Runtime payloads stay under `~/.envpilot/runtimes/java`.
+- Kept non-bundle archive layouts in the private runtime directory, so malformed entries are never published into the standard JVM directory.
+- Extended JDK detection to the user-domain `~/Library/Java/JavaVirtualMachines` directory and to Gradle-provisioned JDKs under `~/.gradle/jdks`. A discovery entry and its private target are counted once.
+
 ## v0.5.0 - 2026-07-13
 
 ### App UI

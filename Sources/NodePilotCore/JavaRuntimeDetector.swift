@@ -79,9 +79,12 @@ public struct JavaRuntimeDetector: JavaRuntimeDetecting, Sendable {
         var homes = Set<String>()
         let fileManager = FileManager.default
 
+        // 系统域 + 用户域的 JVM 目录。用户域里可能只是指向私有运行时的符号链接「发现入口」，
+        // canonicalHomePath 会把它解析成真实路径，再与私有目录扫描结果按路径去重。
         for root in [
             "/Library/Java/JavaVirtualMachines",
             "/System/Library/Java/JavaVirtualMachines",
+            expandHomePath("~/Library/Java/JavaVirtualMachines"),
         ] {
             homes.formUnion(jdkHomesInJVMRoot(root, fileManager: fileManager))
         }
@@ -94,6 +97,9 @@ public struct JavaRuntimeDetector: JavaRuntimeDetecting, Sendable {
             homes.formUnion(jdkHomesInOpenJDKCellarRoot(cellarRoot, fileManager: fileManager))
         }
 
+        // Gradle 自动置办的 JDK 不在任何标准枚举目录里，java_home 也看不见。
+        homes.formUnion(gradleManagedJdkHomes(fileManager: fileManager))
+
         for envPilotRoot in [
             "~/.envpilot/runtimes/java",
             "~/.envpilot/java",
@@ -103,6 +109,46 @@ public struct JavaRuntimeDetector: JavaRuntimeDetecting, Sendable {
         }
 
         return homes
+    }
+
+    /// Gradle 的自动置办目录形如 `~/.gradle/jdks/<provisioner-id>/<jdk-dir>/Contents/Home`，
+    /// 同层还会混有 `.tar.gz` 和 `.lock` 文件；这里只认能跑出 java 的目录。
+    private func gradleManagedJdkHomes(fileManager: FileManager) -> Set<String> {
+        let root = expandHomePath("~/.gradle/jdks")
+        guard let entries = try? fileManager.contentsOfDirectory(atPath: root) else {
+            return []
+        }
+
+        var homes = Set<String>()
+        for entry in entries where !entry.hasPrefix(".") {
+            let entryPath = (root as NSString).appendingPathComponent(entry)
+            if let home = javaHomeNested(under: entryPath, fileManager: fileManager) {
+                homes.insert(home)
+                continue
+            }
+            guard let children = try? fileManager.contentsOfDirectory(atPath: entryPath) else {
+                continue
+            }
+            for child in children where !child.hasPrefix(".") {
+                if let home = javaHomeNested(
+                    under: (entryPath as NSString).appendingPathComponent(child),
+                    fileManager: fileManager
+                ) {
+                    homes.insert(home)
+                }
+            }
+        }
+        return homes
+    }
+
+    private func javaHomeNested(under root: String, fileManager: FileManager) -> String? {
+        for candidate in ["Contents/Home", "Home", ""] {
+            let home = candidate.isEmpty ? root : (root as NSString).appendingPathComponent(candidate)
+            if isJavaHome(home, fileManager: fileManager) {
+                return home
+            }
+        }
+        return nil
     }
 
     private func jdkHomesInJVMRoot(_ root: String, fileManager: FileManager) -> Set<String> {

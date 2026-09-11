@@ -139,10 +139,23 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
 
         let sanitizedVersion = Self.sanitizePathComponent(candidate.version)
         let sanitizedVendor = Self.sanitizePathComponent(candidate.vendor.lowercased())
-        let targetBundle = Self.managedJavaRoot().appendingPathComponent("\(sanitizedVendor)-\(sanitizedVersion).jdk", isDirectory: true)
+        let bundleName = "\(sanitizedVendor)-\(sanitizedVersion).jdk"
+        let targetBundle = Self.managedJavaRoot().appendingPathComponent(bundleName, isDirectory: true)
         let targetHome = targetBundle.appendingPathComponent("Contents/Home", isDirectory: true)
         progress?("正在安装 \(candidate.vendor) JDK \(candidate.version)：写入 95%")
-        try replaceManagedDirectory(source: extractedHome, target: targetHome)
+
+        // macOS 的 .jdk 包是 `Contents/{Home, Info.plist, MacOS}` 三层结构，/usr/libexec/java_home
+        // 靠 Info.plist 判定一个目录算不算 JVM。以前只搬 Home，会得到一个任何标准工具都枚举不到的
+        // 残缺包；现在整包搬迁，并在标准 JVM 目录留一个指向私有运行时的符号链接入口。
+        if let extractedBundle = Self.javaBundleRoot(ifBundleLayoutOf: extractedHome) {
+            try replaceManagedDirectory(source: extractedBundle, target: targetBundle)
+            publishJavaDiscoveryEntry(named: bundleName, pointingTo: targetBundle, progress: progress)
+        } else {
+            // 上游不是 bundle 布局，造不出合规入口；只落私有目录，不往标准 JVM 目录塞残缺条目。
+            try replaceManagedDirectory(source: extractedHome, target: targetHome)
+            removeJavaDiscoveryEntry(named: bundleName)
+        }
+
         let version = versionFromJavaHome(targetHome.path) ?? candidate.version
         progress?("\(candidate.vendor) JDK \(candidate.version) 安装完成 100%")
         return JavaInstallation(version: version, homePath: targetHome.path)
@@ -158,6 +171,47 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
             throw RuntimeComponentInstallerError.runtimeNotInstalled(path: homePath)
         }
         try FileManager.default.removeItem(at: bundleURL)
+        removeJavaDiscoveryEntry(named: bundleURL.lastPathComponent)
+    }
+
+    /// 在 `~/Library/Java/JavaVirtualMachines` 里为私有运行时登记一个符号链接入口，
+    /// 让 `/usr/libexec/java_home` 这类只认标准目录的工具也能枚举到它。
+    /// 尽力而为：失败不影响安装结果，JAVA_HOME 主通道仍然可用。
+    func publishJavaDiscoveryEntry(
+        named name: String,
+        pointingTo bundleURL: URL,
+        progress: (@Sendable (String) -> Void)? = nil
+    ) {
+        let fileManager = FileManager.default
+        let entryURL = Self.javaDiscoveryEntryURL(named: name, environment: environment)
+        do {
+            if !fileManager.fileExists(atPath: entryURL.deletingLastPathComponent().path) {
+                try fileManager.createDirectory(
+                    at: entryURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+            }
+            if Self.isSymlinkEntry(atPath: entryURL.path, fileManager: fileManager) {
+                try fileManager.removeItem(at: entryURL)
+            }
+            // 同名条目若是别人手工放的真实目录，不覆盖。
+            if fileManager.fileExists(atPath: entryURL.path) {
+                return
+            }
+            try fileManager.createSymbolicLink(atPath: entryURL.path, withDestinationPath: bundleURL.path)
+        } catch {
+            progress?("JDK 已安装，但系统 JVM 目录入口未能写入（\(error.localizedDescription)）")
+        }
+    }
+
+    /// 卸载时一并清理符号链接入口，避免在标准 JVM 目录里留下悬空链接。
+    func removeJavaDiscoveryEntry(named name: String) {
+        let fileManager = FileManager.default
+        let entryURL = Self.javaDiscoveryEntryURL(named: name, environment: environment)
+        guard Self.isSymlinkEntry(atPath: entryURL.path, fileManager: fileManager) else {
+            return
+        }
+        try? fileManager.removeItem(at: entryURL)
     }
 
     public func listAvailablePythonVersions(stableOnly: Bool = true) throws -> [PythonDownloadCandidate] {
@@ -734,6 +788,33 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
     static func managedJavaRoot() -> URL {
         URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
             .appendingPathComponent(".envpilot/runtimes/java", isDirectory: true)
+    }
+
+    /// macOS bundle 布局的 JDK 包，其 bundle 根目录是 `Contents` 的父目录；非该布局返回 nil。
+    static func javaBundleRoot(ifBundleLayoutOf homeURL: URL) -> URL? {
+        guard homeURL.lastPathComponent == "Home",
+              homeURL.deletingLastPathComponent().lastPathComponent == "Contents" else {
+            return nil
+        }
+        return homeURL
+            .deletingLastPathComponent()   // Contents
+            .deletingLastPathComponent()   // bundle 根目录
+    }
+
+    /// 标准 JVM 目录里的发现入口路径。用 `HOME` 而非 `NSHomeDirectory()`，与探测器保持一致且可测。
+    static func javaDiscoveryEntryURL(named name: String, environment: [String: String]) -> URL {
+        let trimmedHome = environment["HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let home = (trimmedHome?.isEmpty == false) ? trimmedHome! : NSHomeDirectory()
+        return URL(fileURLWithPath: home, isDirectory: true)
+            .appendingPathComponent("Library/Java/JavaVirtualMachines", isDirectory: true)
+            .appendingPathComponent(name)
+    }
+
+    static func isSymlinkEntry(atPath path: String, fileManager: FileManager) -> Bool {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: path) else {
+            return false
+        }
+        return (attributes[.type] as? FileAttributeType) == .typeSymbolicLink
     }
 
     static func managedPythonRoot() -> URL {
