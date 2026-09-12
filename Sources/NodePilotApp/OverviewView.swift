@@ -9,11 +9,12 @@ struct OverviewView: View {
 
     @State private var detailsExpanded = false
 
+    /// 作用域只显示目录名，完整路径放 tooltip——顶栏没必要塞一整条路径。
     private var scopeLabel: String {
         guard let directory = store.inspectedDirectory else {
             return "全局默认作用域"
         }
-        return "项目 \(abbreviated(directory.path))"
+        return "项目 · \(directory.lastPathComponent)"
     }
 
     private var activationScript: String {
@@ -96,35 +97,42 @@ struct OverviewView: View {
 
     private func environmentRow(_ summary: RuntimeSummary) -> some View {
         let isSwitching = store.isBusy(key: "switch:\(summary.kind.rawValue)")
+        let version = summary.current.map { VersionLabel.display(summary.kind, $0.version) } ?? summary.version
+        let hasRuntime = !summary.options.isEmpty
 
-        return HStack(alignment: .center, spacing: 10) {
+        return HStack(alignment: .center, spacing: 12) {
             Image(systemName: summary.kind.symbol)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 18)
 
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(summary.kind.title)
+            // 版本号是这一行唯一的主视觉；来源放在它下面一行，靠位置而不是颜色区分。
+            VStack(alignment: .leading, spacing: 2) {
+                if hasRuntime {
+                    Text(version)
+                        .runtimeVersionFont()
+                        .foregroundStyle(summary.current == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(summary.kind.tint))
+                } else {
+                    Text("未安装")
                         .font(.callout)
-
-                    Pill(
-                        summary.source.label,
-                        tone: sourceTone(summary.source),
-                        symbol: summary.source == .none ? nil : "circle.fill"
-                    )
-
-                    if !summary.isCurrentValid {
-                        Pill("配置缺失", tone: .negative, symbol: "exclamationmark.triangle.fill")
-                    }
+                        .foregroundStyle(.tertiary)
                 }
 
-                Text(summary.path ?? "未选择运行时")
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(summary.path == nil ? .tertiary : .secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(summary.path ?? "未选择运行时")
+                HStack(spacing: 5) {
+                    Text(summary.kind.title)
+                    if hasRuntime, summary.source != .none {
+                        Text("·")
+                        Text(summary.source.label)
+                    }
+                    if !summary.isCurrentValid {
+                        Text("·")
+                        Text("配置缺失")
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
             }
 
             Spacer(minLength: 10)
@@ -234,19 +242,6 @@ struct OverviewView: View {
     private func abbreviated(_ path: String) -> String {
         path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
     }
-
-    private func sourceTone(_ source: VersionSource) -> Pill.Tone {
-        switch source {
-        case .projectFile:
-            return .informative
-        case .global:
-            return .neutral
-        case .none:
-            return .warning
-        }
-    }
-
-
 }
 
 enum SettingsPaths {

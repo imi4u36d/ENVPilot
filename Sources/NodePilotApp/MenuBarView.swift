@@ -176,7 +176,6 @@ struct MenuBarView: View {
         }
     }
 
-    @ViewBuilder
     private func pickerList(_ kind: RuntimeKind) -> some View {
         let summary = store.summary(for: kind)
 
@@ -229,19 +228,16 @@ struct MenuBarView: View {
     /// 超过限高时才套 `ScrollView` 组内滚动。
     @ViewBuilder
     private func versionListGroup(_ summary: RuntimeSummary) -> some View {
-        let rows = versionList(summary)
-        let content = rows
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 4)
-            .background(colorScheme == .dark ? Color(white: 1, opacity: 0.05) : Color(white: 0, opacity: 0.045))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
         if CGFloat(summary.options.count) * Self.pickerRowHeight > Self.expandedListHeight {
-            ScrollView(.vertical) { content }
-                .scrollBounceBehavior(.basedOnSize)
-                .frame(height: Self.expandedListHeight, alignment: .top)
+            ScrollView(.vertical) {
+                versionList(summary)
+                    .versionListGroupChrome(colorScheme)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(height: Self.expandedListHeight, alignment: .top)
         } else {
-            content
+            versionList(summary)
+                .versionListGroupChrome(colorScheme)
         }
     }
 
@@ -505,6 +501,14 @@ private struct PanelRowButtonStyle: ButtonStyle {
 private extension View {
     func panelSection() -> some View {
         modifier(PanelSection())
+    }
+
+    /// 展开列表里那层浅凹槽背景。
+    func versionListGroupChrome(_ scheme: ColorScheme) -> some View {
+        frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+            .background(scheme == .dark ? Color(white: 1, opacity: 0.05) : Color(white: 0, opacity: 0.045))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 

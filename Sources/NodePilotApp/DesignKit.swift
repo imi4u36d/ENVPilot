@@ -207,6 +207,31 @@ enum DesignColor {
     }
 }
 
+// MARK: - Runtime identity
+
+extension RuntimeKind {
+    /// 运行时标识色。只用在版本号上，帮助扫读，不做装饰性铺色。
+    var tint: Color {
+        switch self {
+        case .node:
+            return Color(red: 0.20, green: 0.68, blue: 0.40)
+        case .java:
+            return Color(red: 0.88, green: 0.52, blue: 0.14)
+        case .python:
+            return Color(red: 0.25, green: 0.54, blue: 0.86)
+        }
+    }
+}
+
+// MARK: - Typography
+
+extension View {
+    /// 版本号统一字号：比正文大一档、等宽圆体，保证一行内可扫读。
+    func runtimeVersionFont(size: CGFloat = 17, weight: Font.Weight = .semibold) -> some View {
+        font(.system(size: size, weight: weight, design: .rounded).monospacedDigit())
+    }
+}
+
 // MARK: - Status pill
 
 struct Pill: View {

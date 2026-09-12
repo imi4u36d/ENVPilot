@@ -154,7 +154,7 @@ swift test
 打包产物位于 `dist/ENVPilot.app` 与 `dist/ENVPilot.dmg`。版本号可通过环境变量注入，发布流水线即以此覆盖 tag 版本：
 
 ```bash
-APP_VERSION=0.6.0 APP_BUILD=3 ./scripts/package_app.sh release
+APP_VERSION=0.6.1 APP_BUILD=4 ./scripts/package_app.sh release
 ```
 
 ### 图标
@@ -194,8 +194,8 @@ ENVPILOT_MENUBAR_SNAPSHOT=/tmp/expanded.png ENVPILOT_MENUBAR_SNAPSHOT_PICK=node 
 手动触发（Actions ▸ Release macOS app ▸ Run workflow）时只上传 workflow artifact，不创建 Release。需要正式发布时打 tag 即可：
 
 ```bash
-git tag v0.6.0
-git push origin v0.6.0
+git tag v0.6.1
+git push origin v0.6.1
 ```
 
 ## 项目结构
