@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.6.0 - 2026-09-11
+
+### App UI and UX
+
+- Rebuilt the window shell on `NavigationSplitView`: real translucent sidebar, unified toolbar (refresh + ⌘R), per-page navigation title and subtitle. The previous hand-built `NSWindow` and the duplicate `Settings` scene rendering the same root view are gone, so ⌘, now opens a small dedicated settings window instead of a second main window.
+- Collapsed seven sidebar destinations into four pages: 概览 / 运行时 / 项目 / 环境预设. Node, JDK and Python share one 运行时 page with a segmented switcher instead of three near-identical pages.
+- Added an always-visible current-environment panel on 概览: one row per runtime with its resolved version, a 项目声明 / 全局默认 source marker and an inline version switcher, so the most frequent action (changing the version you are using) is one click from launch.
+- Added a project inspector on the 项目 page: choose or paste a directory, see which versions its `.envpilot` declares, whether they are installed, and copy the command that applies them to the current terminal. Recently inspected folders are remembered.
+- Downloadable versions now load automatically when a runtime page opens and can be refiltered locally; install progress and per-row state stay attached to the row that is working instead of a page-wide banner.
+- Moved errors and confirmations into a persistent status strip above the bottom of the window, so feedback is never scrolled out of view.
+- Removed the decorative layer (gradient page background, tinted card rails, material-filled status capsules, custom text-field chrome) in favour of system materials, hairline separators and standard controls.
+- Shortened the menu bar item to an icon with a native menu; version switching there uses submenu pickers.
+
+### Platform
+
+- Raised the minimum deployment target to macOS 14 (`Package.swift`, `LSMinimumSystemVersion`) to use the newer window and menu primitives.
+
 ## v0.5.1 - 2026-09-11
 
 ### JDK Discovery and Installation

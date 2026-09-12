@@ -1,391 +1,522 @@
 import Foundation
 import ENVPilotCore
 
+// MARK: - Status + candidates
+
+struct StatusMessage: Equatable {
+    enum Tone: Equatable {
+        case notice
+        case error
+    }
+
+    let text: String
+    let tone: Tone
+}
+
+struct InstallCandidate: Identifiable, Hashable {
+    let kind: RuntimeKind
+    let displayVersion: String
+    let subtitle: String
+    let argument: String
+    var isInstalled: Bool
+    let isRecommended: Bool
+    let badge: String?
+
+    var id: String {
+        "\(kind.rawValue):\(displayVersion)"
+    }
+
+    var title: String {
+        switch kind {
+        case .node:
+            return "Node \(displayVersion)"
+        case .java:
+            return "JDK \(displayVersion)"
+        case .python:
+            return "Python \(displayVersion)"
+        }
+    }
+}
+
+// MARK: - Store
+
 @MainActor
 final class NodeRuntimeStore: ObservableObject {
     @Published private(set) var snapshot: NodeRuntimeSnapshot?
-    @Published private(set) var nodeDownloadCandidates: [NodeDownloadCandidate] = []
-    @Published private(set) var javaDownloadCandidates: [JavaDownloadCandidate] = []
-    @Published private(set) var pythonDownloadCandidates: [PythonDownloadCandidate] = []
+    @Published private(set) var summaries: [RuntimeSummary] = []
+    @Published private(set) var projectSnapshot: ProjectEnvironmentSnapshot?
+    @Published private(set) var inspectedDirectory: URL?
+    @Published private(set) var candidates: [InstallCandidate] = []
     @Published private(set) var isLoading = false
-    @Published private(set) var loadingMessage: String?
-    @Published private(set) var installingCandidateID: String?
-    @Published private(set) var installingCandidateMessage: String?
-    @Published private(set) var installationProgress: RuntimeInstallationProgress?
-    @Published private(set) var latestNotice: String?
-    @Published var latestError: String?
+    @Published private(set) var busyKey: String?
+    @Published private(set) var progressMessage: String?
+    @Published private(set) var progressFraction: Double?
+    @Published private(set) var statusMessage: StatusMessage?
+    @Published private(set) var recentProjectPaths: [String]
 
     private let service: any NodeRuntimeServicing
+    private let defaults: UserDefaults
+    private var deriveTask: Task<Void, Never>?
 
-    init(service: any NodeRuntimeServicing) {
+    private static let recentProjectsKey = "envpilot.recentProjectPaths"
+    private static let maxRecentProjects = 6
+
+    init(
+        service: any NodeRuntimeServicing = LocalNodeRuntimeService(),
+        defaults: UserDefaults = .standard
+    ) {
         self.service = service
-        Task { await refresh() }
+        self.defaults = defaults
+        self.recentProjectPaths = defaults.stringArray(forKey: Self.recentProjectsKey) ?? []
+        Task { await self.refresh() }
     }
 
-    var configuredNodeVersion: String {
-        snapshot?.settings.selectedVersion ?? "--"
+    // MARK: Derived state
+
+    var isBusy: Bool {
+        isLoading
     }
 
-    var configuredNodeInstallation: NodeInstallation? {
-        guard let settings = snapshot?.settings else {
+    func isBusy(key: String) -> Bool {
+        busyKey == key
+    }
+
+    func progress(forKey key: String) -> (message: String, fraction: Double?)? {
+        guard busyKey == key, let progressMessage else {
             return nil
         }
-        if let selectedNodePath = settings.selectedNodePath {
-            return snapshot?.installations.first(where: { $0.installPath == selectedNodePath })
-        }
-        guard let selectedVersion = settings.selectedVersion else {
-            return nil
-        }
-        return snapshot?.installations.first(where: { $0.version == selectedVersion })
+        return (progressMessage, progressFraction)
     }
 
-    var configuredNodeStatus: String {
-        guard snapshot?.settings.selectedVersion != nil else {
-            return "尚未选择"
+    func summary(for kind: RuntimeKind) -> RuntimeSummary {
+        summaries.first(where: { $0.id == kind.rawValue }) ?? .empty(kind)
+    }
+
+    func candidates(for kind: RuntimeKind) -> [InstallCandidate] {
+        candidates.filter { $0.kind == kind }
+    }
+
+    var hasAnyRuntime: Bool {
+        summaries.contains { !$0.options.isEmpty }
+    }
+
+    var statusSummary: String {
+        guard !summaries.isEmpty else {
+            return "正在读取运行时信息…"
         }
-        if configuredNodeInstallation != nil {
-            return "当前使用"
+        let parts = summaries.compactMap { summary -> String? in
+            guard summary.version != RuntimeSummary.emptyVersion else {
+                return nil
+            }
+            return "\(summary.kind.commandName) \(VersionLabel.display(summary.kind, summary.version))"
         }
-        return "配置缺失"
+        return parts.isEmpty ? "未选择任何运行时" : parts.joined(separator: " · ")
     }
 
-    var displayNodeVersion: String {
-        snapshot?.activeVersion ?? snapshot?.settings.selectedVersion ?? "--"
+    func dismissStatus() {
+        statusMessage = nil
     }
 
-    var displayJavaVersion: String {
-        RuntimeDisplayFormatter.javaVersion(
-            snapshot?.settings.selectedJavaVersion ?? snapshot?.activeJavaVersion
-        )
-    }
+    // MARK: Project scope
 
-    var displayPythonVersion: String {
-        snapshot?.settings.selectedPythonVersion ?? snapshot?.activePythonVersion ?? "--"
-    }
-
-    var displayNodePath: String {
-        if let installation = configuredNodeInstallation {
-            return installation.installPath
+    func setProjectDirectory(_ path: String?) {
+        guard let path, !path.isEmpty else {
+            inspectedDirectory = nil
+            projectSnapshot = nil
+            scheduleDerive()
+            return
         }
-        return snapshot?.activeNodePath ?? "--"
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            statusMessage = StatusMessage(text: "路径不存在：\(path)", tone: .error)
+            return
+        }
+        inspectedDirectory = url
+        rememberProject(url.path)
+        scheduleDerive()
     }
 
-    var menuBarTitle: String {
-        guard snapshot != nil else { return "ENVPilot" }
-        let node = displayNodeVersion
-        let java = displayJavaVersion
-        let python = displayPythonVersion
-
-        if python != "--" {
-            return "Node \(node) | JDK \(java) | Python \(python)"
+    func forgetProject(_ path: String) {
+        recentProjectPaths.removeAll { $0 == path }
+        defaults.set(recentProjectPaths, forKey: Self.recentProjectsKey)
+        if inspectedDirectory?.path == path {
+            setProjectDirectory(nil)
         }
-        if java != "--" {
-            return "Node \(node) | JDK \(java)"
-        }
-        return "Node \(node)"
     }
+
+    private func rememberProject(_ path: String) {
+        var paths = recentProjectPaths
+        paths.removeAll { $0 == path }
+        paths.insert(path, at: 0)
+        recentProjectPaths = Array(paths.prefix(Self.maxRecentProjects))
+        defaults.set(recentProjectPaths, forKey: Self.recentProjectsKey)
+    }
+
+    // MARK: Operations
 
     func refresh() async {
-        let progress = makeProgressUpdater()
-        await runOperation(message: "正在刷新运行时信息...") { [self] in
-            try await self.runBackground { [service] in
-                try service.loadSnapshot(progress: progress)
-            }
-        } onError: { error in
-            "刷新失败：\(error.localizedDescription)"
+        await runSnapshotOperation(
+            key: "refresh",
+            message: "正在读取运行时信息…"
+        ) { service, _ in
+            return try service.loadSnapshot(progress: nil)
+        } failure: { error in
+            StatusMessage(text: "读取失败：\(error.localizedDescription)", tone: .error)
         }
+        scheduleDerive()
     }
 
-    func setDefaultNode(version: String) async {
-        let progress = makeProgressUpdater()
-        let succeeded = await runOperation(message: "正在切换 Node \(version)...") { [self] in
-            try await self.runBackground { [service] in
-                try service.setDefaultNode(version: version, progress: progress)
+    func loadCandidates(for kind: RuntimeKind, force: Bool = false) async {
+        guard force || candidates(for: kind).isEmpty else {
+            return
+        }
+
+        let installedSnapshot = snapshot
+        let key = "candidates:\(kind.rawValue)"
+
+        let loaded: [InstallCandidate]? = await runListOperation(
+            key: key,
+            message: "正在获取 \(kind.title) 版本列表…"
+        ) { service, _ in
+            switch kind {
+            case .node:
+                return try service.listAvailableNodeVersions(ltsOnly: false).map {
+                    InstallCandidate(
+                        kind: .node,
+                        displayVersion: $0.version,
+                        subtitle: $0.lts.map { "LTS \($0)" } ?? "Current",
+                        argument: $0.version,
+                        isInstalled: false,
+                        isRecommended: $0.lts != nil,
+                        badge: $0.lts == nil ? nil : "LTS"
+                    )
+                }
+            case .java:
+                return try service.listAvailableJavaVersions(ltsOnly: false).map {
+                    let isLTS = $0.version.contains("LTS")
+                    return InstallCandidate(
+                        kind: .java,
+                        displayVersion: "\($0.featureVersion) (\($0.version))",
+                        subtitle: $0.vendor,
+                        argument: String($0.featureVersion),
+                        isInstalled: false,
+                        isRecommended: isLTS,
+                        badge: isLTS ? "LTS" : nil
+                    )
+                }
+            case .python:
+                return try service.listAvailablePythonVersions(stableOnly: false).map {
+                    let isStable = !$0.version.contains("rc") && !$0.version.contains("b")
+                    return InstallCandidate(
+                        kind: .python,
+                        displayVersion: $0.version,
+                        subtitle: "CPython 源码构建",
+                        argument: $0.version,
+                        isInstalled: false,
+                        isRecommended: isStable,
+                        badge: nil
+                    )
+                }
             }
-        } onError: { error in
-            "设置 Node 版本失败：\(error.localizedDescription)"
+        } failure: { error in
+            StatusMessage(text: "获取版本列表失败：\(error.localizedDescription)", tone: .error)
+        }
+
+        guard let loaded else {
+            return
+        }
+
+        var updated = candidates.filter { $0.kind != kind }
+        updated.append(contentsOf: loaded.map { candidate in
+            guard let installedSnapshot else {
+                return candidate
+            }
+            let isInstalled = RuntimeSnapshotReader
+                .installations(for: candidate.kind, in: installedSnapshot)
+                .contains { RuntimeSnapshotReader.matches(installed: $0.version, requested: candidate.argument, kind: candidate.kind) }
+            var mutable = candidate
+            mutable.isInstalled = isInstalled
+            return mutable
+        })
+        candidates = updated
+    }
+
+    func selectDefault(_ runtime: InstalledRuntime) async {
+        let key = "switch:\(runtime.kind.rawValue)"
+        guard !isBusy(key: key) else {
+            return
+        }
+        let title = "\(runtime.kind.title) \(runtime.version)"
+        let succeeded = await runSnapshotOperation(
+            key: key,
+            message: "正在切换 \(title)…"
+        ) { service, progress in
+            switch runtime.kind {
+            case .node:
+                return try service.setDefaultNode(version: runtime.version, progress: progress)
+            case .java:
+                return try service.setDefaultJava(version: runtime.version, homePath: runtime.path)
+            case .python:
+                return try service.setDefaultPython(version: runtime.version, homePath: runtime.path)
+            }
+        } failure: { error in
+            StatusMessage(text: "切换失败：\(error.localizedDescription)", tone: .error)
         }
         if succeeded {
-            latestNotice = "已切换到 Node \(version)，新打开的终端将自动生效。"
+            statusMessage = StatusMessage(text: "已切换 \(title)，新开的终端将使用该版本。", tone: .notice)
         }
+        scheduleDerive()
     }
 
-    func installNode(version: String) async {
-        let progress = makeProgressUpdater(candidateID: "node-\(version)")
-        let succeeded = await runOperation(message: "正在安装 Node \(version)...") { [self] in
-            try await self.runBackground { [service] in
-                try service.installNode(version: version, progress: progress)
+    func install(_ candidate: InstallCandidate) async {
+        let key = "install:\(candidate.id)"
+        guard !candidate.isInstalled, !isBusy(key: key) else {
+            return
+        }
+        let succeeded = await runSnapshotOperation(
+            key: key,
+            message: "正在安装 \(candidate.title)…"
+        ) { service, progress in
+            switch candidate.kind {
+            case .node:
+                return try service.installNode(version: candidate.argument, progress: progress)
+            case .java:
+                guard let featureVersion = Int(candidate.argument) else {
+                    throw RuntimeStoreError.invalidVersion(candidate.argument)
+                }
+                return try service.installJava(featureVersion: featureVersion, progress: progress)
+            case .python:
+                return try service.installPython(version: candidate.argument, progress: progress)
             }
-        } onError: { error in
-            "安装 Node 版本失败：\(error.localizedDescription)"
+        } failure: { error in
+            StatusMessage(text: "安装 \(candidate.title) 失败：\(error.localizedDescription)", tone: .error)
         }
         if succeeded {
-            latestNotice = "Node \(version) 安装完成，已可设为当前版本。"
+            statusMessage = StatusMessage(text: "\(candidate.title) 安装完成，可在概览中设为默认。", tone: .notice)
         }
+        scheduleDerive()
     }
 
-    func queryNodeDownloadCandidates(ltsOnly: Bool) async {
-        isLoading = true
-        loadingMessage = "正在获取 Node 可安装版本..."
-        latestNotice = nil
-        defer {
-            isLoading = false
-            loadingMessage = nil
-        }
-
-        do {
-            nodeDownloadCandidates = try await runBackground { [service] in
-                try service.listAvailableNodeVersions(ltsOnly: ltsOnly)
+    func uninstall(kind: RuntimeKind, version: String, path: String) async {
+        let succeeded = await runSnapshotOperation(
+            key: "uninstall:\(kind.rawValue):\(path)",
+            message: "正在卸载…"
+        ) { service, progress in
+            switch kind {
+            case .node:
+                return try service.uninstallNode(version: version, progress: progress)
+            case .java:
+                return try service.uninstallJava(homePath: path, progress: progress)
+            case .python:
+                return try service.uninstallPython(homePath: path, progress: progress)
             }
-            latestError = nil
-        } catch {
-            latestError = "获取 Node 可安装版本失败：\(error.localizedDescription)"
-        }
-    }
-
-    func uninstallNode(version: String) async {
-        let progress = makeProgressUpdater()
-        let succeeded = await runOperation(message: "正在卸载 Node \(version)...") { [self] in
-            try await self.runBackground { [service] in
-                try service.uninstallNode(version: version, progress: progress)
-            }
-        } onError: { error in
-            "卸载 Node 版本失败：\(error.localizedDescription)"
+        } failure: { error in
+            StatusMessage(text: "卸载失败：\(error.localizedDescription)", tone: .error)
         }
         if succeeded {
-            latestNotice = "Node \(version) 已卸载。"
+            statusMessage = StatusMessage(text: "已卸载。", tone: .notice)
         }
+        scheduleDerive()
     }
 
-    func setDefaultJava(version: String, homePath: String) async {
-        let succeeded = await runOperation(message: "正在切换 JDK \(version)...") { [self] in
-            try await self.runBackground { [service] in
-                try service.setDefaultJava(version: version, homePath: homePath)
-            }
-        } onError: { error in
-            "设置 JDK 版本失败：\(error.localizedDescription)"
+    func setProjectPreference(_ preference: ProjectVersionPreference) async {
+        await runSnapshotOperation(
+            key: "preference",
+            message: "正在更新项目策略…"
+        ) { service, _ in
+            return try service.setProjectVersionPreference(preference)
+        } failure: { error in
+            StatusMessage(text: "更新失败：\(error.localizedDescription)", tone: .error)
         }
-        if succeeded {
-            latestNotice = "已切换到 JDK \(version)，新打开的终端将自动生效。"
-        }
+        scheduleDerive()
     }
 
-    func installJava(featureVersion: Int) async {
-        let progress = makeProgressUpdater(candidateID: "java-\(featureVersion)")
-        let succeeded = await runOperation(message: "正在安装 JDK \(featureVersion)...") { [self] in
-            try await self.runBackground { [service] in
-                try service.installJava(featureVersion: featureVersion, progress: progress)
-            }
-        } onError: { error in
-            "安装 JDK 失败：\(error.localizedDescription)"
-        }
-        if succeeded {
-            latestNotice = "JDK \(featureVersion) 安装完成，已可设为当前版本。"
-        }
-    }
-
-    func queryJavaDownloadCandidates(ltsOnly: Bool) async {
-        isLoading = true
-        loadingMessage = "正在获取 JDK 可安装版本..."
-        latestNotice = nil
-        defer {
-            isLoading = false
-            loadingMessage = nil
-        }
-
-        do {
-            javaDownloadCandidates = try await runBackground { [service] in
-                try service.listAvailableJavaVersions(ltsOnly: ltsOnly)
-            }
-            latestError = nil
-        } catch {
-            latestError = "获取 JDK 可安装版本失败：\(error.localizedDescription)"
-        }
-    }
-
-    func setDefaultPython(version: String, homePath: String) async {
-        let succeeded = await runOperation(message: "正在切换 Python \(version)...") { [self] in
-            try await self.runBackground { [service] in
-                try service.setDefaultPython(version: version, homePath: homePath)
-            }
-        } onError: { error in
-            "设置 Python 版本失败：\(error.localizedDescription)"
-        }
-        if succeeded {
-            latestNotice = "已切换到 Python \(version)，新打开的终端将自动生效。"
-        }
-    }
-
-    func installPython(version: String) async {
-        let progress = makeProgressUpdater(candidateID: "python-\(version)")
-        let succeeded = await runOperation(message: "正在安装 Python \(version)...") { [self] in
-            try await self.runBackground { [service] in
-                try service.installPython(version: version, progress: progress)
-            }
-        } onError: { error in
-            "安装 Python 失败：\(error.localizedDescription)"
-        }
-        if succeeded {
-            latestNotice = "Python \(version) 安装完成，已可设为当前版本。"
-        }
-    }
-
-    func queryPythonDownloadCandidates(stableOnly: Bool) async {
-        isLoading = true
-        loadingMessage = "正在获取 Python 可安装版本..."
-        latestNotice = nil
-        defer {
-            isLoading = false
-            loadingMessage = nil
-        }
-
-        do {
-            pythonDownloadCandidates = try await runBackground { [service] in
-                try service.listAvailablePythonVersions(stableOnly: stableOnly)
-            }
-            latestError = nil
-        } catch {
-            latestError = "获取 Python 可安装版本失败：\(error.localizedDescription)"
-        }
-    }
-
-    func clearDownloadCandidates() {
-        nodeDownloadCandidates = []
-        javaDownloadCandidates = []
-        pythonDownloadCandidates = []
-    }
-
-    func uninstallJava(version: String, homePath: String) async {
-        let progress = makeProgressUpdater()
-        let succeeded = await runOperation(message: "正在卸载 JDK \(version)...") { [self] in
-            try await self.runBackground { [service] in
-                try service.uninstallJava(homePath: homePath, progress: progress)
-            }
-        } onError: { error in
-            "卸载 JDK 失败：\(error.localizedDescription)"
-        }
-        if succeeded {
-            latestNotice = "JDK \(version) 已卸载。"
-        }
-    }
-
-    func uninstallPython(version: String, homePath: String) async {
-        let progress = makeProgressUpdater()
-        let succeeded = await runOperation(message: "正在卸载 Python \(version)...") { [self] in
-            try await self.runBackground { [service] in
-                try service.uninstallPython(homePath: homePath, progress: progress)
-            }
-        } onError: { error in
-            "卸载 Python 失败：\(error.localizedDescription)"
-        }
-        if succeeded {
-            latestNotice = "Python \(version) 已卸载。"
-        }
-    }
+    // MARK: Profiles
 
     func setSelectedProfile(id: UUID) async {
-        let succeeded = await runOperation(message: "正在切换环境预设...") { [self] in
-            try await self.runBackground { [service] in
-                try service.setSelectedProfile(id: id)
-            }
-        } onError: { error in
-            "切换环境预设失败：\(error.localizedDescription)"
+        let succeeded = await runSnapshotOperation(
+            key: "profile",
+            message: "正在切换环境预设…"
+        ) { service, _ in
+            return try service.setSelectedProfile(id: id)
+        } failure: { error in
+            StatusMessage(text: "切换预设失败：\(error.localizedDescription)", tone: .error)
         }
-        if succeeded,
-           let profileName = snapshot?.settings.profiles.first(where: { $0.id == id })?.name {
-            latestNotice = "已切换到环境预设“\(profileName)”。"
+        if succeeded, let name = snapshot?.settings.profiles.first(where: { $0.id == id })?.name {
+            statusMessage = StatusMessage(text: "已切换到环境预设「\(name)」。", tone: .notice)
         }
+        scheduleDerive()
     }
 
     @discardableResult
     func saveProfile(_ profile: EnvironmentProfile) async -> Bool {
-        let succeeded = await runOperation(message: "正在保存环境预设...") { [self] in
-            try await self.runBackground { [service] in
-                try service.saveProfile(profile)
-            }
-        } onError: { error in
-            "保存环境预设失败：\(error.localizedDescription)"
+        let succeeded = await runSnapshotOperation(
+            key: "profile",
+            message: "正在保存环境预设…"
+        ) { service, _ in
+            return try service.saveProfile(profile)
+        } failure: { error in
+            StatusMessage(text: "保存失败：\(error.localizedDescription)", tone: .error)
         }
         if succeeded {
-            latestNotice = "环境预设“\(profile.name)”已保存。"
+            statusMessage = StatusMessage(text: "环境预设「\(profile.name)」已保存。", tone: .notice)
         }
+        scheduleDerive()
         return succeeded
     }
 
     func createProfile(named name: String) async {
-        let succeeded = await runOperation(message: "正在创建环境预设...") { [self] in
-            try await self.runBackground { [service] in
-                try service.createProfile(named: name)
-            }
-        } onError: { error in
-            "创建环境预设失败：\(error.localizedDescription)"
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return
+        }
+        let succeeded = await runSnapshotOperation(
+            key: "profile",
+            message: "正在创建环境预设…"
+        ) { service, _ in
+            return try service.createProfile(named: trimmed)
+        } failure: { error in
+            StatusMessage(text: "创建失败：\(error.localizedDescription)", tone: .error)
         }
         if succeeded {
-            latestNotice = "环境预设已创建。"
+            statusMessage = StatusMessage(text: "已创建环境预设「\(trimmed)」。", tone: .notice)
         }
+        scheduleDerive()
     }
 
-    func setProjectVersionPreference(_ preference: ProjectVersionPreference) async {
-        await runOperation(message: "正在更新项目版本策略...") { [self] in
-            try await self.runBackground { [service] in
-                try service.setProjectVersionPreference(preference)
-            }
-        } onError: { error in
-            "更新项目版本策略失败：\(error.localizedDescription)"
+    // MARK: Plumbing
+
+    /// 串行化：所有写操作等待前一个操作结束（最多 2 秒），避免并发下载/切换互相覆盖状态。
+    private func acquireOrSkip() async -> Bool {
+        var remaining = 40
+        while isLoading, remaining > 0 {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            remaining -= 1
         }
+        guard isLoading else {
+            return true
+        }
+        statusMessage = StatusMessage(text: "已有操作正在进行，请稍候后再试。", tone: .notice)
+        return false
     }
 
-    private func runBackground<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
-        try await Task.detached(priority: .userInitiated, operation: work).value
+    private func beginOperation(key: String, message: String) {
+        isLoading = true
+        busyKey = key
+        progressMessage = message
+        progressFraction = nil
+        statusMessage = nil
     }
 
-    private func makeProgressUpdater(candidateID: String? = nil) -> @Sendable (String) -> Void {
-        if let candidateID {
-            installingCandidateID = candidateID
-            installingCandidateMessage = nil
-            installationProgress = RuntimeInstallationProgress(
-                candidateID: candidateID,
-                message: "正在准备安装..."
-            )
-        }
-        return { [weak self] message in
+    private func endOperation() {
+        isLoading = false
+        busyKey = nil
+        progressMessage = nil
+        progressFraction = nil
+    }
+
+    private func makeProgress(for key: String) -> @Sendable (String) -> Void {
+        { message in
             Task { @MainActor [weak self] in
-                self?.loadingMessage = message
-                if let candidateID {
-                    self?.installingCandidateMessage = message
-                    self?.installationProgress = RuntimeInstallationProgress(
-                        candidateID: candidateID,
-                        message: message
-                    )
+                guard let self, self.busyKey == key else {
+                    return
                 }
+                self.progressMessage = message
+                self.progressFraction = RuntimeInstallationProgress(candidateID: key, message: message).fractionCompleted
             }
         }
     }
 
     @discardableResult
-    private func runOperation(
+    private func runSnapshotOperation(
+        key: String,
         message: String,
-        _ operation: @escaping () async throws -> NodeRuntimeSnapshot,
-        onError: (Error) -> String
+        _ work: @escaping @Sendable (any NodeRuntimeServicing, @escaping @Sendable (String) -> Void) throws -> NodeRuntimeSnapshot,
+        failure: (Error) -> StatusMessage
     ) async -> Bool {
-        isLoading = true
-        loadingMessage = message
-        latestNotice = nil
-        defer {
-            isLoading = false
-            loadingMessage = nil
-            installingCandidateID = nil
-            installingCandidateMessage = nil
-            installationProgress = nil
+        guard await acquireOrSkip() else {
+            return false
         }
+        beginOperation(key: key, message: message)
+        defer { endOperation() }
 
+        let progress = makeProgress(for: key)
         do {
-            snapshot = try await operation()
-            latestError = nil
+            let service = self.service
+            let updated = try await Task.detached(priority: .userInitiated) {
+                try work(service, progress)
+            }.value
+            snapshot = updated
             return true
         } catch {
-            latestError = onError(error)
+            statusMessage = failure(error)
             return false
+        }
+    }
+
+    private func runListOperation<T: Sendable>(
+        key: String,
+        message: String,
+        _ work: @escaping @Sendable (any NodeRuntimeServicing, @escaping @Sendable (String) -> Void) throws -> T,
+        failure: (Error) -> StatusMessage
+    ) async -> T? {
+        guard await acquireOrSkip() else {
+            return nil
+        }
+        beginOperation(key: key, message: message)
+        defer { endOperation() }
+
+        let silentProgress: @Sendable (String) -> Void = { _ in }
+        do {
+            let service = self.service
+            return try await Task.detached(priority: .userInitiated) {
+                try work(service, silentProgress)
+            }.value
+        } catch {
+            statusMessage = failure(error)
+            return nil
+        }
+    }
+
+    private func scheduleDerive() {
+        deriveTask?.cancel()
+        guard let snapshot else {
+            projectSnapshot = nil
+            summaries = []
+            return
+        }
+        guard let inspectedDirectory else {
+            projectSnapshot = nil
+            summaries = RuntimeSnapshotReader.summaries(for: snapshot, directory: nil)
+            return
+        }
+
+        deriveTask = Task { [weak self, snapshot] in
+            guard let self else {
+                return
+            }
+            let directory = inspectedDirectory
+            let derived = await Task.detached(priority: .userInitiated) { () -> ([RuntimeSummary], ProjectEnvironmentSnapshot) in
+                let summaries = RuntimeSnapshotReader.summaries(for: snapshot, directory: directory)
+                let project = ProjectInspector.inspect(directory: directory, snapshot: snapshot)
+                return (summaries, project)
+            }.value
+            guard !Task.isCancelled else {
+                return
+            }
+            self.summaries = derived.0
+            self.projectSnapshot = derived.1
+        }
+    }
+}
+
+enum RuntimeStoreError: LocalizedError {
+    case invalidVersion(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidVersion(let value):
+            return "无法识别的版本：\(value)"
         }
     }
 }

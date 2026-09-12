@@ -1,5 +1,5 @@
 [![Release](https://img.shields.io/github/v/release/imi4u36d/ENVPilot?sort=semver)](https://github.com/imi4u36d/ENVPilot/releases)
-[![macOS](https://img.shields.io/badge/macOS-13%2B-111111?logo=apple)](https://github.com/imi4u36d/ENVPilot)
+[![macOS](https://img.shields.io/badge/macOS-14%2B-111111?logo=apple)](https://github.com/imi4u36d/ENVPilot)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138?logo=swift&logoColor=white)](https://www.swift.org/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
@@ -7,24 +7,23 @@
 
 ENVPilot 是一款原生 macOS 开发环境管理工具。它统一管理 Node.js、JDK 和 Python 运行时，并根据全局设置或项目中的 `.envpilot` 文件自动生成终端环境。
 
-- 原生 SwiftUI 主窗口与可选菜单栏入口
+- 原生 SwiftUI 主窗口（侧边栏 + 工具栏）与可选菜单栏入口
 - 运行时由 ENVPilot 自主管理，不依赖 Homebrew、SDKMAN、nvm、fnm 或 pyenv
 - 同时提供图形界面、`envpilot-helper` 和简写命令 `ep`
 - 支持项目版本策略、环境预设和自定义环境变量
 
 ## 应用界面
 
-### 环境预设
+主窗口分四个页面，左侧栏切换（⌘R 随时重新读取本机运行时）：
 
-为不同网络或项目维护 npm、pnpm、yarn registry、`NODE_OPTIONS` 与自定义环境变量。
+| 页面 | 作用 |
+| --- | --- |
+| 概览 | 当前生效的 Node / JDK / Python、版本来源（项目声明或全局默认）、一键切换版本、终端将执行的导出语句 |
+| 运行时 | 一个页面内切换 Node / JDK / Python；上半部分是已安装版本（设为默认、卸载），下半部分是可安装版本（搜索、仅 LTS、安装进度） |
+| 项目 | 项目版本策略，选择或粘贴项目目录后展示 `.envpilot` 解析出的版本、是否已安装，以及让当前终端立即生效的命令 |
+| 环境预设 | 左侧预设列表，右侧编辑 npm / pnpm / yarn registry、`NODE_OPTIONS` 与自定义环境变量 |
 
-![ENVPilot 环境预设](docs/screenshots/profiles.png)
-
-### 应用设置
-
-菜单栏入口可以随时关闭；主窗口仍可从 Dock 打开并重新启用。
-
-![ENVPilot 应用设置](docs/screenshots/settings.png)
+应用设置（菜单栏入口开关、终端环境、路径与诊断信息）在 **ENVPilot ▸ 设置…** 或 ⌘, 的独立窗口中，不占用主窗口页面。
 
 ## 功能
 
@@ -66,7 +65,7 @@ PYTHON_VERSION=3.13.7
 
 ### 从源码一键安装
 
-要求 macOS 13 或更高版本，以及支持 Swift 6.2 的开发工具链。
+要求 macOS 14 或更高版本，以及支持 Swift 6.2 的开发工具链。
 
 ```bash
 git clone https://github.com/imi4u36d/ENVPilot.git
