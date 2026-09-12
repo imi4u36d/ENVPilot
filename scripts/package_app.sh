@@ -47,7 +47,12 @@ cp "$APP_ICON" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 chmod +x "$APP_BUNDLE/Contents/MacOS/ENVPilotApp"
 chmod +x "$APP_BUNDLE/Contents/Resources/bin/envpilot-helper"
 
-cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
+# 版本号可通过环境变量注入（发布流水线用 tag 覆盖）；
+# 未设置时保持仓库内的默认值，便于本地构建。
+APP_VERSION="${APP_VERSION:-0.6.0}"
+APP_BUILD="${APP_BUILD:-3}"
+
+cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -67,9 +72,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.5.1</string>
+  <string>${APP_VERSION}</string>
   <key>CFBundleVersion</key>
-  <string>2</string>
+  <string>${APP_BUILD}</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>NSHighResolutionCapable</key>

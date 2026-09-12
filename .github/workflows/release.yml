@@ -1,0 +1,119 @@
+name: Release macOS app
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（例如 v0.6.0）；留空则使用当前 commit 的短 SHA"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ENVPilot.app
+    # Package.swift 要求 Swift 6.2+，macos-26 镜像自带 Xcode 26.6（Swift 6.3）。
+    runs-on: macos-26
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcode-select -p
+          swift --version
+
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VERSION="$GITHUB_REF_NAME"
+          elif [[ -n "${INPUT_VERSION:-}" ]]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="0.0.0-dev+${GITHUB_SHA:0:7}"
+          fi
+          # CFBundleShortVersionString 只接受数字与点，去掉前缀 v。
+          NUMERIC="${VERSION#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "numeric=$NUMERIC" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $VERSION (CFBundleShortVersionString=$NUMERIC)"
+
+      - name: Run tests
+        run: swift test
+
+      - name: Build and package app
+        env:
+          APP_VERSION: ${{ steps.version.outputs.numeric }}
+          APP_BUILD: ${{ github.run_number }}
+        run: ./scripts/package_app.sh release
+
+      - name: Verify bundle
+        run: |
+          set -euo pipefail
+          APP="dist/ENVPilot.app"
+          codesign --verify --deep --strict "$APP"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist"
+          test -x "$APP/Contents/Resources/bin/envpilot-helper"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" dist/ENVPilot.zip
+          ls -lh dist/ENVPilot.dmg dist/ENVPilot.zip
+
+      - name: Write release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cat > dist/release-notes.md <<NOTES
+          ENVPilot ${VERSION}
+
+          ## 安装
+
+          1. 下载下方的 \`ENVPilot.dmg\`。
+          2. 打开后把 ENVPilot 拖到「应用程序」目录。
+
+          > 本构建为 ad-hoc 签名、未经 Apple 公证。首次打开若提示「已损坏」或「无法验证开发者」，
+          > 请执行 \`xattr -dr com.apple.quarantine /Applications/ENVPilot.app\`，或在
+          > 「系统设置 ▸ 隐私与安全性」中允许打开。
+
+          ## 系统要求
+
+          - macOS 14 或更高版本
+          - Apple Silicon（arm64）
+
+          \`ENVPilot.zip\` 是未经压缩的 app 包，供需要校验或自行签名的场景使用。
+          NOTES
+          cat dist/release-notes.md
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ENVPilot-${{ steps.version.outputs.version }}
+          path: |
+            dist/ENVPilot.dmg
+            dist/ENVPilot.zip
+          if-no-files-found: error
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ENVPilot ${{ steps.version.outputs.version }}
+          tag_name: ${{ github.ref_name }}
+          body_path: dist/release-notes.md
+          files: |
+            dist/ENVPilot.dmg
+            dist/ENVPilot.zip
+          fail_on_unmatched_files: true

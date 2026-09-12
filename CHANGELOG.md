@@ -1,6 +1,24 @@
 # Changelog
 
-## v0.6.0 - 2026-09-11
+## v0.6.0 - 2026-09-12
+
+### Menu Bar
+
+- Replaced the native menu with a custom `.window` panel: one row per runtime showing its effective version, its source (项目声明 / 全局默认) and a one-click version switcher.
+- Expanding a row lists every installed version with its origin (ENVPilot 管理 / 系统安装), marks the current one, and collapses the panel after a switch. Runtimes with nothing installed are flagged instead of offering a dead end.
+- The panel reports the active scope (global or a specific project path) and keeps window-level actions (main window, settings, quit) together. It refreshes itself when opened, so a stale version list is no longer possible.
+
+### App Icon
+
+- Replaced the translucent, glass-like icon with a flat geometric mark: a solid indigo squircle, a white terminal chevron and three runtime dots for Node / JDK / Python.
+- The icon is generated from code (`scripts/generate_app_icon.py`) rather than shipped as a hand-drawn asset, so colours and geometry stay reproducible.
+
+### Tooling
+
+- Added `MenuBarSnapshot`: an offscreen `ImageRenderer` snapshot of the real menu bar panel, in light and dark, with an option to expand a runtime row. The menu bar popover cannot be captured with `screencapture` or driven by automation, so this is the review and regression path.
+- Added `.github/workflows/release.yml`: pushing a `v*` tag runs the test suite, packages the app with the tag as `CFBundleShortVersionString`, verifies the bundle signature, and publishes `ENVPilot.dmg` plus `ENVPilot.zip` to a GitHub Release. Manual runs upload the artifacts without creating a release.
+- `scripts/package_app.sh` now accepts `APP_VERSION` and `APP_BUILD` overrides.
+- Rewrote the README around the menu bar panel, the four main window pages, the release pipeline and the reproducible tooling.
 
 ### App UI and UX
 
@@ -11,7 +29,7 @@
 - Downloadable versions now load automatically when a runtime page opens and can be refiltered locally; install progress and per-row state stay attached to the row that is working instead of a page-wide banner.
 - Moved errors and confirmations into a persistent status strip above the bottom of the window, so feedback is never scrolled out of view.
 - Removed the decorative layer (gradient page background, tinted card rails, material-filled status capsules, custom text-field chrome) in favour of system materials, hairline separators and standard controls.
-- Shortened the menu bar item to an icon with a native menu; version switching there uses submenu pickers.
+- Shortened the menu bar item to a standalone icon, independent of the main window.
 
 ### Platform
 

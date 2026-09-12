@@ -6,7 +6,9 @@ struct ENVPilotApp: App {
     @AppStorage(AppPreferenceKey.showsMenuBarMenu) private var showsMenuBarMenu = true
 
     init() {
-        _store = StateObject(wrappedValue: NodeRuntimeStore())
+        let store = NodeRuntimeStore()
+        _store = StateObject(wrappedValue: store)
+        MenuBarSnapshot.runIfRequested(store: store)
     }
 
     var body: some Scene {
@@ -22,7 +24,7 @@ struct ENVPilotApp: App {
         } label: {
             Image(systemName: "terminal.fill")
         }
-        .menuBarExtraStyle(.menu)
+        .menuBarExtraStyle(.window)
 
         Settings {
             SettingsRootView(store: store)
