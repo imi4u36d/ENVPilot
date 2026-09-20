@@ -19,7 +19,7 @@ struct MenuBarView: View {
 
     /// 固定面板宽度；离屏快照可复用同一套排版。
     static let panelWidth: CGFloat = 336
-    /// 面板最高高度，超出后在面板内滚动。
+    /// 面板高度预算；正文按设计封顶在此以内（实测摘要态约 300，展开态约 560）。
     static let panelMaxHeight: CGFloat = 620
 
     /// 当前展开版本列表的运行时；`nil` 表示只展示摘要。
@@ -37,19 +37,21 @@ struct MenuBarView: View {
     }
 
     var body: some View {
-        ScrollView(.vertical) {
-            panelContent
-        }
-        .scrollBounceBehavior(.basedOnSize)
-        .frame(width: Self.panelWidth)
-        .frame(maxHeight: Self.panelMaxHeight)
-        .panelChrome(colorScheme)
-        .onAppear(perform: refreshIfNeeded)
+        // 面板根部刻意不用 `ScrollView`：`MenuBarExtra` 是按内容对“当前（初次布局为 0）
+        // 提议尺寸”的响应来决定窗口高度的，而 `ScrollView` 在纵轴上是贪婪的 ——
+        // 提议高度为 0 时它回答 0，整个面板于是塌成一条细缝（啥也看不见）。
+        // 正文本身高度确定（摘要态约 300，展开态约 560，均在 `panelMaxHeight` 以内），
+        // 需要滚动的只有展开后的版本列表，由 `expandedListHeight` 显式限高。
+        panelContent
+            .frame(width: Self.panelWidth)
+            .frame(maxHeight: Self.panelMaxHeight, alignment: .top)
+            .fixedSize(horizontal: false, vertical: true)
+            .panelChrome(colorScheme)
+            .onAppear(perform: refreshIfNeeded)
     }
 
-    /// 面板正文。独立于 `ScrollView`，便于离屏快照直接渲染（`ImageRenderer`
-    /// 不会绘制 `ScrollView` 的内容）。
-    var panelContent: some View {
+    /// 面板正文：标题、运行时、作用域与底部操作。面板外观（背景/描边）由 `body` 补上。
+    private var panelContent: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
             runtimeSection
@@ -353,7 +355,7 @@ struct MenuBarView: View {
             .frame(width: 22, height: 22)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(DesignColor.hairline.opacity(isActive ? 0.28 : 0.16))
+                    .fill(panelWell(colorScheme).opacity(isActive ? 1 : 0.6))
             )
     }
 
@@ -452,12 +454,12 @@ enum PanelChrome {
 /// 面板外观刻意不用语义 NSColor（`.windowBackgroundColor` / `.controlBackgroundColor`）：
 /// 视觉与正常窗口一致，同时离屏快照（`ImageRenderer`）也能正确呈现深浅色。
 /// `scheme` 显式传入而非只依赖环境：`background` 修饰符内的环境在离屏渲染下不可靠。
+/// 取值与主窗口的 `DesignColor` 保持一致：浅色纯白、深色纯黑。
 private struct PanelBackground: View {
     let scheme: ColorScheme
 
     var body: some View {
-        // 浅色下比纯白略暗一点，避免整个面板与白色卡片糊在一起。
-        scheme == .dark ? Color(white: 0.13) : Color(white: 0.965)
+        scheme == .dark ? Color(white: 0) : Color(white: 1)
     }
 }
 
@@ -467,7 +469,7 @@ private struct PanelSection: ViewModifier {
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
         return content
-            .background(scheme == .dark ? Color(white: 0.17) : Color(white: 1), in: shape)
+            .background(scheme == .dark ? Color(white: 0.055) : Color(white: 1), in: shape)
             .overlay {
                 shape.strokeBorder(panelHairline(scheme), lineWidth: 1)
             }
@@ -477,6 +479,12 @@ private struct PanelSection: ViewModifier {
 /// 面板描边：深色下需要比窗口分隔线更亮，否则卡片边界消失。
 private func panelHairline(_ scheme: ColorScheme) -> Color {
     scheme == .dark ? Color(white: 1, opacity: 0.14) : Color(white: 0, opacity: 0.12)
+}
+
+/// 面板里的中性凹槽 / 徽章底色。与主窗口的 `DesignColor.well` 同值，
+/// 但同样按 `scheme` 显式取色，理由同 `PanelBackground`。
+private func panelWell(_ scheme: ColorScheme) -> Color {
+    scheme == .dark ? Color(white: 1, opacity: 0.06) : Color(white: 0, opacity: 0.045)
 }
 
 /// 面板内的裸行按钮：悬停高亮 + 按下反馈。

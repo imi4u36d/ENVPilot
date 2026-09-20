@@ -30,6 +30,8 @@ struct SettingsRootView: View {
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .frame(width: 600, height: 500)
+        .scrollContentBackground(.hidden)
+        .background(DesignColor.canvas)
     }
 
     // MARK: Cards
@@ -81,7 +83,7 @@ struct SettingsRootView: View {
                             .padding(10)
                     }
                     .frame(maxHeight: 150)
-                    .background(DesignColor.hairline.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
+                    .background(DesignColor.well, in: RoundedRectangle(cornerRadius: 6))
                 }
             }
         }

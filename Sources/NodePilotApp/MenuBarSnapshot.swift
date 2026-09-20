@@ -39,8 +39,8 @@ enum MenuBarSnapshot {
         emit(renderLayer(store: store, scheme: .dark), to: urlVariant(url, suffix: "-dark"))
     }
 
-    /// 直接渲染真实的 `MenuBarView` 正文：`ImageRenderer` 不会绘制 `ScrollView`
-    /// 的内容，因此这里复用 `panelContent` 并手动补上面板外观。
+    /// 直接渲染真实的 `MenuBarView`（含面板外观）。刻意不绕过 `body`：
+    /// 面板塌成细缝这类问题只出现在根部容器上，快照必须覆盖同一棵树。
     private static func renderLayer(store: NodeRuntimeStore, scheme: ColorScheme) -> CGImage? {
         let renderer = ImageRenderer(content: snapshotLayer(store: store, scheme: scheme))
         renderer.scale = 2
@@ -54,11 +54,8 @@ enum MenuBarSnapshot {
             Color.clear
                 .frame(width: MenuBarView.panelWidth + 40, height: 560)
             MenuBarView(store: store, initialPicking: pickingFromEnvironment)
-                .panelContent
                 .environment(\.colorScheme, scheme)
-                .frame(width: MenuBarView.panelWidth, alignment: .topLeading)
                 .fixedSize(horizontal: false, vertical: true)
-                .panelChrome(scheme)
                 .offset(x: 20, y: 20)
         }
     }

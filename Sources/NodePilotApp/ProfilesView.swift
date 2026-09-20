@@ -7,7 +7,8 @@ import ENVPilotCore
 final class ProfileEditorModel: ObservableObject {
     @Published var selectedProfileID: UUID?
     @Published var draft: EnvironmentProfile
-    @Published var revealValues = false
+    /// 变量值默认遮蔽，需要时再显式显示。
+    @Published var masksValues = true
 
     private let store: NodeRuntimeStore
 
@@ -120,13 +121,18 @@ struct ProfilesView: View {
     @State private var newProfileName = ""
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .top, spacing: 18) {
             listColumn
-                .frame(width: 244)
+                .frame(width: 248)
+                .padding(.bottom, 20)
+
             editorColumn
         }
-        .padding(20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.horizontal, Metric.pagePadding)
+        .padding(.top, 20)
+        .frame(maxWidth: Metric.pageMaxWidth, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(DesignColor.canvas)
         .onAppear {
             model.syncFromSnapshot()
         }
@@ -153,53 +159,91 @@ struct ProfilesView: View {
         }
     }
 
-    // MARK: List column
+    // MARK: 预设列表
 
     private var listColumn: some View {
-        Card("环境预设") {
-            VStack(alignment: .leading, spacing: 10) {
-                if model.profiles.isEmpty {
-                    EmptyHint(
-                        text: "创建预设后可配置 registry 与环境变量。",
-                        symbol: "tray"
-                    )
-                } else {
-                    List(selection: selectionBinding) {
+        VStack(alignment: .leading, spacing: 0) {
+            GroupSection(
+                title: "环境预设",
+                hint: model.profiles.isEmpty ? nil : "\(model.profiles.count) 个"
+            ) {
+                VStack(spacing: 2) {
+                    if model.profiles.isEmpty {
+                        InlineHint(symbol: "tray", text: "还没有预设，在下方新建一个。")
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 4)
+                    } else {
                         ForEach(model.profiles) { profile in
-                            HStack(spacing: 6) {
-                                Text(profile.name)
-                                    .font(.callout)
-                                    .lineLimit(1)
-                                Spacer(minLength: 4)
-                                if store.snapshot?.settings.selectedProfileID == profile.id {
-                                    Pill("使用中", tone: .positive, symbol: "checkmark.circle.fill")
-                                }
-                            }
-                            .tag(profile.id)
+                            profileButton(profile)
                         }
                     }
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
-                    .frame(maxHeight: .infinity)
                 }
+                .padding(6)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+            .frame(maxHeight: .infinity)
 
-                Divider()
+            createRow
+        }
+    }
 
-                VStack(alignment: .leading, spacing: 7) {
-                    TextField("新预设名称，例如 公司网络", text: $newProfileName)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit(createProfile)
+    private func profileButton(_ profile: EnvironmentProfile) -> some View {
+        let isSelected = model.selectedProfileID == profile.id
+        let isCurrent = store.snapshot?.settings.selectedProfileID == profile.id
 
-                    Button {
-                        createProfile()
-                    } label: {
-                        Label("创建预设", systemImage: "plus")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .disabled(newProfileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        return Button {
+            requestSelect(profile.id)
+        } label: {
+            HStack(spacing: 8) {
+                Text(profile.name)
+                    .font(.callout)
+                    .lineLimit(1)
+
+                Spacer(minLength: 6)
+
+                if isCurrent {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.green)
+                        .help("当前使用")
                 }
             }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .buttonStyle(SelectableRowStyle(isSelected: isSelected))
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+
+    private func requestSelect(_ profileID: UUID) {
+        guard profileID != model.selectedProfileID else {
+            return
+        }
+        if model.isDirty {
+            pendingSwitch = profileID
+        } else {
+            model.select(profileID)
+        }
+    }
+
+    private var createRow: some View {
+        HStack(spacing: 7) {
+            TextField("新预设名称，例如 公司网络", text: $newProfileName)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(createProfile)
+
+            Button {
+                createProfile()
+            } label: {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(.bordered)
+            .disabled(newProfileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .help("创建预设")
+            .accessibilityLabel("创建预设")
+        }
+        .padding(.top, 10)
     }
 
     private func createProfile() {
@@ -214,22 +258,6 @@ struct ProfilesView: View {
         }
     }
 
-    private var selectionBinding: Binding<UUID?> {
-        Binding(
-            get: { model.selectedProfileID },
-            set: { newValue in
-                guard let newValue, newValue != model.selectedProfileID else {
-                    return
-                }
-                if model.isDirty {
-                    pendingSwitch = newValue
-                } else {
-                    model.select(newValue)
-                }
-            }
-        )
-    }
-
     private var switchDialogBinding: Binding<Bool> {
         Binding(
             get: { pendingSwitch != nil },
@@ -241,42 +269,44 @@ struct ProfilesView: View {
         )
     }
 
-    // MARK: Editor column
+    // MARK: 编辑器
 
     private var editorColumn: some View {
         ScrollView {
-            Card("预设编辑") {
+            VStack(alignment: .leading, spacing: Metric.sectionSpacing) {
                 if model.selectedProfileID == nil {
-                    EmptyHint(
-                        text: "在左侧选择或创建一个预设。",
-                        symbol: "questionmark.circle"
-                    )
-                } else {
-                    VStack(alignment: .leading, spacing: 14) {
-                        editorHeader
-                        Divider()
-                        settingsSection
-                        variableSection
-                        actionBar
+                    GroupSection {
+                        EmptyState(
+                            symbol: "slider.horizontal.3",
+                            title: "还没有选中预设",
+                            message: "在左侧选择或创建一个预设，然后在这里配置 registry 与环境变量。"
+                        )
                     }
+                } else {
+                    editorHeader
+                    nameSection
+                    registrySection
+                    nodeSection
+                    variablesSection
                 }
             }
+            .padding(.bottom, 20)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxHeight: .infinity)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if model.selectedProfileID != nil {
+                editorActionBar
+            }
+        }
     }
 
     private var editorHeader: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(model.draft.name.isEmpty ? "未命名预设" : model.draft.name)
-                .font(.headline)
+                .font(.title3.weight(.semibold))
                 .lineLimit(1)
 
             Spacer(minLength: 8)
-
-            if let validation = model.validationMessage {
-                Pill("无法保存", tone: .negative, symbol: "exclamationmark.triangle.fill")
-                    .help(validation)
-            }
 
             Pill(
                 model.isDirty ? "未保存" : "已保存",
@@ -286,94 +316,112 @@ struct ProfilesView: View {
         }
     }
 
-    private var settingsSection: some View {
-        VStack(spacing: 0) {
-            LabeledField(title: "预设名称") {
-                TextField("例如 默认、公司网络", text: $model.draft.name)
-                    .textFieldStyle(.roundedBorder)
-            }
-            Divider()
-            LabeledField(title: "npm registry") {
-                RegistryField(text: $model.draft.npmRegistry, placeholder: "https://registry.npmjs.org/")
-            }
-            Divider()
-            LabeledField(title: "pnpm registry") {
-                RegistryField(text: $model.draft.pnpmRegistry, placeholder: "留空则不设置")
-            }
-            Divider()
-            LabeledField(title: "yarn registry") {
-                RegistryField(text: $model.draft.yarnRegistry, placeholder: "留空则不设置")
-            }
-            Divider()
-            LabeledField(title: "NODE_OPTIONS") {
-                TextField("例如 --max-old-space-size=4096", text: $model.draft.nodeOptions)
-                    .textFieldStyle(.roundedBorder)
+    private var nameSection: some View {
+        GroupSection(title: "预设", footer: "预设名称会显示在终端提示符与概览页中。") {
+            GroupRow {
+                LabeledField(title: "名称") {
+                    TextField("例如 默认、公司网络", text: $model.draft.name)
+                        .textFieldStyle(.roundedBorder)
+                }
             }
         }
     }
 
-    private var variableSection: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 8) {
-                Text("自定义环境变量")
-                    .font(.subheadline.weight(.medium))
+    private var registrySection: some View {
+        GroupSection(
+            title: "包管理器 registry",
+            footer: "留空的 registry 不会写入终端环境。"
+        ) {
+            VStack(spacing: 0) {
+                GroupRow {
+                    LabeledField(title: "npm") {
+                        RegistryField(text: $model.draft.npmRegistry, placeholder: "https://registry.npmjs.org/")
+                    }
+                }
+                GroupRow(dividerAbove: true) {
+                    LabeledField(title: "pnpm") {
+                        RegistryField(text: $model.draft.pnpmRegistry, placeholder: "留空则不设置")
+                    }
+                }
+                GroupRow(dividerAbove: true) {
+                    LabeledField(title: "yarn") {
+                        RegistryField(text: $model.draft.yarnRegistry, placeholder: "留空则不设置")
+                    }
+                }
+            }
+        }
+    }
 
-                Spacer(minLength: 8)
+    private var nodeSection: some View {
+        GroupSection(title: "Node") {
+            GroupRow {
+                LabeledField(title: "NODE_OPTIONS") {
+                    TextField("例如 --max-old-space-size=4096", text: $model.draft.nodeOptions)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+        }
+    }
 
-                if !model.draft.variables.isEmpty {
+    private var variablesSection: some View {
+        GroupSection(
+            title: "自定义环境变量",
+            footer: "变量名需以字母或下划线开头，只包含字母、数字和下划线。",
+            accessory: AnyView(
+                HStack(spacing: 12) {
+                    if !model.draft.variables.isEmpty {
+                        Button {
+                            model.masksValues.toggle()
+                        } label: {
+                            Label(
+                                model.masksValues ? "显示变量值" : "隐藏变量值",
+                                systemImage: model.masksValues ? "eye" : "eye.slash"
+                            )
+                        }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                    }
+
                     Button {
-                        model.revealValues.toggle()
+                        model.draft.variables.append(CustomEnvironmentVariable(key: "", value: ""))
                     } label: {
-                        Label(model.revealValues ? "隐藏变量值" : "显示变量值", systemImage: model.revealValues ? "eye.slash" : "eye")
+                        Label("新增变量", systemImage: "plus")
                     }
                     .buttonStyle(.borderless)
                     .controlSize(.small)
                 }
-
-                Button {
-                    model.draft.variables.append(CustomEnvironmentVariable(key: "", value: ""))
-                } label: {
-                    Label("新增变量", systemImage: "plus")
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-            }
-
+            )
+        ) {
             if model.draft.variables.isEmpty {
-                Text("暂无自定义变量。")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                GroupRow {
+                    InlineHint(
+                        symbol: "text.badge.plus",
+                        text: "暂无自定义变量。可用它配置代理地址、私有仓库令牌等。"
+                    )
+                }
             } else {
-                VStack(spacing: 7) {
+                VStack(spacing: 0) {
                     ForEach(Array(model.draft.variables.indices), id: \.self) { index in
-                        HStack(spacing: 7) {
-                            TextField("NAME", text: $model.draft.variables[index].key)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 180)
+                        GroupRow(dividerAbove: index > 0) {
+                            HStack(spacing: 8) {
+                                TextField("NAME", text: $model.draft.variables[index].key)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.callout.monospaced())
+                                    .frame(width: 180)
 
-                            variableValueField(index)
+                                variableValueField(index)
 
-                            Button {
-                                model.draft.variables.remove(at: index)
-                            } label: {
-                                Image(systemName: "minus.circle")
+                                Button {
+                                    model.draft.variables.remove(at: index)
+                                } label: {
+                                    Image(systemName: "minus.circle")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("删除变量")
+                                .accessibilityLabel("删除变量")
                             }
-                            .buttonStyle(.borderless)
-                            .help("删除变量")
-                            .accessibilityLabel("删除变量")
                         }
                     }
-                }
-            }
-
-            if let validation = model.validationMessage {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
-                    Text(validation)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
                 }
             }
         }
@@ -381,7 +429,7 @@ struct ProfilesView: View {
 
     @ViewBuilder
     private func variableValueField(_ index: Int) -> some View {
-        if model.revealValues {
+        if model.masksValues {
             SecureField("value", text: $model.draft.variables[index].value)
                 .textFieldStyle(.roundedBorder)
         } else {
@@ -390,11 +438,27 @@ struct ProfilesView: View {
         }
     }
 
-    private var actionBar: some View {
+    /// 固定在底部的保存栏：长表单滚动时保存按钮始终可见。
+    private var editorActionBar: some View {
         HStack(spacing: 8) {
-            Text("修改后需保存，并在终端中重载才生效。")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            if let validation = model.validationMessage {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                Text(validation)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } else {
+                Image(systemName: model.isDirty ? "circle.circle" : "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(model.isDirty ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                Text(model.isDirty ? "有未保存的更改" : "已保存，终端重载后生效")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
 
             Spacer(minLength: 8)
 
@@ -412,6 +476,10 @@ struct ProfilesView: View {
             .keyboardShortcut("s", modifiers: .command)
             .disabled(!model.canSave)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(DesignColor.canvas)
+        .overlay(alignment: .top) { Divider() }
     }
 }
 
@@ -422,15 +490,14 @@ struct LabeledField<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(title)
                 .font(.callout)
                 .foregroundStyle(.secondary)
-                .frame(width: 116, alignment: .leading)
+                .frame(width: 96, alignment: .leading)
 
             content
         }
-        .padding(.vertical, 6)
     }
 }
 

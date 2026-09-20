@@ -10,30 +10,28 @@ struct RuntimesView: View {
     @State private var searchText = ""
     @State private var recommendedOnly = true
     @State private var pendingUninstall: RuntimeUninstallRequest?
-    @FocusState private var searchFocused: Bool
 
-    private let contentWidth: CGFloat = 920
     private let maximumVisibleCandidates = 40
+
+    private var isSearching: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             controlBar
-                .padding(.horizontal, 20)
-                .padding(.top, 14)
-                .padding(.bottom, 10)
-                .frame(maxWidth: contentWidth + 40, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .top)
-                .background(.bar)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    installedCard
-                    availableCard
+                VStack(alignment: .leading, spacing: Metric.sectionSpacing) {
+                    installedSection
+                    availableSection
                 }
-                .padding(20)
-                .frame(maxWidth: contentWidth, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .top)
+                .padding(.horizontal, Metric.pagePadding)
+                .padding(.vertical, 20)
+                .frame(maxWidth: Metric.pageMaxWidth, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
+            .background(DesignColor.canvas)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: kind) {
@@ -62,24 +60,16 @@ struct RuntimesView: View {
                 Text("将删除 \(request.displayName)。\n\(request.path)")
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    searchFocused = true
-                } label: {
-                    Label("筛选", systemImage: "magnifyingglass")
-                }
-                .keyboardShortcut("f", modifiers: .command)
-                .help("聚焦版本筛选 (⌘F)")
-                .accessibilityLabel("聚焦版本筛选")
-            }
-        }
     }
 
-    // MARK: Pinned controls
+    // MARK: 固定工具栏
 
+    // MARK: 筛选行
+
+    /// 运行时切换、版本搜索、「仅 LTS」都是筛选，放同一行贴着内容列，
+    /// 不再往窗口顶部要一条工具栏。
     private var controlBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Picker("运行时", selection: $kind) {
                 ForEach(RuntimeKind.allCases) { item in
                     Text(item.title).tag(item)
@@ -89,64 +79,44 @@ struct RuntimesView: View {
             .pickerStyle(.segmented)
             .fixedSize()
 
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                TextField(kind.searchPrompt, text: $searchText)
-                    .textFieldStyle(.plain)
-                    .font(.callout)
-                    .focused($searchFocused)
-                    .accessibilityLabel("筛选可安装版本")
-            }
-            .padding(.horizontal, 9)
-            .frame(width: 250, height: 26)
-            .background(DesignColor.hairline.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
+            Spacer(minLength: 12)
+
+            SearchField(text: $searchText, placeholder: kind.searchPrompt)
+                .frame(width: 250, height: 22)
+                .accessibilityLabel(kind.searchPrompt)
 
             Toggle(kind.filterTitle, isOn: $recommendedOnly)
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .fixedSize()
-
-            Spacer(minLength: 8)
-
-            Button {
-                Task { await store.loadCandidates(for: kind, force: true) }
-            } label: {
-                Label("重新获取", systemImage: "arrow.clockwise")
-            }
-            .buttonStyle(.bordered)
-            .disabled(store.isBusy)
+                .help("只显示长期支持版本")
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, Metric.pagePadding)
+        .padding(.vertical, 11)
+        .frame(maxWidth: Metric.pageMaxWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .background(DesignColor.canvas)
+        .overlay(alignment: .bottom) { Divider() }
     }
 
-    // MARK: Installed
+    // MARK: 已安装
 
-    private var installedCard: some View {
+    private var installedSection: some View {
         let summary = store.summary(for: kind)
 
-        return Card(
-            "已安装",
-            accessory: AnyView(
-                Text(installedCountLabel(summary))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            )
-        ) {
+        return GroupSection(title: "已安装", hint: installedCountLabel(summary)) {
             if summary.options.isEmpty {
-                EmptyHint(
-                    text: "本机没有 ENVPilot 管理的 \(kind.title)。可在下方选择一个版本安装。",
-                    symbol: "tray"
+                EmptyState(
+                    symbol: "tray",
+                    title: "本机没有 ENVPilot 管理的 \(kind.title)",
+                    message: "在下方选择一个版本安装。"
                 )
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(summary.options.enumerated()), id: \.element.id) { index, option in
-                        if index > 0 {
-                            Divider()
+                        GroupRow(dividerAbove: index > 0) {
+                            installedRow(option, isCurrent: summary.current?.id == option.id)
                         }
-                        installedRow(option, isCurrent: summary.current?.id == option.id)
-                            .padding(.vertical, 9)
                     }
                 }
             }
@@ -154,13 +124,13 @@ struct RuntimesView: View {
     }
 
     private func installedRow(_ option: InstalledRuntime, isCurrent: Bool) -> some View {
-        let canUninstall = option.isManaged
+        HStack(alignment: .center, spacing: 12) {
+            RuntimeBadge(kind: kind, size: 26)
 
-        return HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
+                HStack(spacing: 7) {
                     Text(VersionLabel.display(option.kind, option.version))
-                        .font(.callout.monospacedDigit())
+                        .rowVersionFont()
 
                     if isCurrent {
                         Pill("当前使用", tone: .positive, symbol: "checkmark.circle.fill")
@@ -172,15 +142,14 @@ struct RuntimesView: View {
                 }
 
                 Text(option.path)
-                    .font(.caption2.monospaced())
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .textSelection(.enabled)
                     .help(option.path)
             }
 
-            Spacer(minLength: 10)
+            Spacer(minLength: 12)
 
             if store.isBusy(key: "switch:\(kind.rawValue)") {
                 ProgressView()
@@ -194,32 +163,46 @@ struct RuntimesView: View {
                 .disabled(store.isBusy)
             }
 
-            if canUninstall {
-                Button {
-                    pendingUninstall = RuntimeUninstallRequest(
-                        target: uninstallTarget(option: option, isCurrent: isCurrent)
-                    )
+            if option.isManaged {
+                Menu {
+                    Button("在 Finder 中显示") {
+                        DesktopPathActions.revealInFinder(option.path)
+                    }
+                    Divider()
+                    Button("卸载 \(VersionLabel.display(kind, option.version))", role: .destructive) {
+                        pendingUninstall = RuntimeUninstallRequest(
+                            target: uninstallTarget(option: option, isCurrent: isCurrent)
+                        )
+                    }
                 } label: {
-                    Image(systemName: "trash")
+                    Image(systemName: "ellipsis")
                 }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .help("卸载 \(option.version)")
-                .accessibilityLabel("卸载 \(option.version)")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
                 .disabled(store.isBusy)
+                .help("更多操作")
+                .accessibilityLabel("\(VersionLabel.display(kind, option.version)) 的更多操作")
             }
         }
     }
 
-    // MARK: Available
+    // MARK: 可安装版本
 
-    private var availableCard: some View {
-        Card(
-            "可安装版本",
+    private var availableSection: some View {
+        GroupSection(
+            title: "可安装版本",
+            footer: "来自 \(kind.title) 官方分发。",
             accessory: AnyView(
-                Text("来自 \(kind.title) 官方分发")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Button {
+                    Task { await store.loadCandidates(for: kind, force: true) }
+                } label: {
+                    Label("重新获取", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .disabled(store.isBusy)
+                .help("重新获取 \(kind.title) 官方版本列表")
             )
         ) {
             candidateList
@@ -238,37 +221,51 @@ struct RuntimesView: View {
                     Text("正在获取 \(kind.title) 版本列表…")
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
                 }
+                .padding(Metric.groupPadding)
             } else {
-                EmptyHint(
-                    text: "点击右上角「重新获取」载入 \(kind.title) 官方版本；进入本页时通常已自动获取。",
-                    symbol: "cloud.download"
+                EmptyState(
+                    symbol: "cloud.download",
+                    title: "还没有载入 \(kind.title) 版本列表",
+                    message: "点击右上角「重新获取」从官方分发读取。"
                 )
             }
         } else if visible.isEmpty {
-            EmptyHint(
-                text: "没有匹配「\(searchText)」的版本\(recommendedOnly ? "，或已被「\(kind.filterTitle)」过滤" : "")。",
-                symbol: "magnifyingglass"
+            EmptyState(
+                symbol: "magnifyingglass",
+                title: "没有匹配的版本",
+                message: searchEmptyMessage
             )
         } else {
             VStack(spacing: 0) {
                 ForEach(Array(visible.prefix(maximumVisibleCandidates).enumerated()), id: \.element.id) { index, candidate in
-                    if index > 0 {
-                        Divider()
+                    GroupRow(dividerAbove: index > 0) {
+                        candidateRow(candidate)
                     }
-                    candidateRow(candidate)
-                        .padding(.vertical, 9)
                 }
 
                 if visible.count > maximumVisibleCandidates {
-                    Divider()
-                    Text("仅显示前 \(maximumVisibleCandidates) 个结果，可用上方筛选缩小范围。")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .padding(.top, 8)
+                    RowDivider()
+                    Text("仅显示前 \(maximumVisibleCandidates) 个结果，可用筛选缩小范围。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, Metric.rowPadding)
+                        .padding(.vertical, 9)
                 }
             }
         }
+    }
+
+    private var searchEmptyMessage: String {
+        if isSearching, recommendedOnly {
+            return "没有匹配「\(searchText)」的版本，或已被「\(kind.filterTitle)」过滤。"
+        }
+        if isSearching {
+            return "没有匹配「\(searchText)」的版本。"
+        }
+        return "已被「\(kind.filterTitle)」过滤，关闭筛选可看到全部版本。"
     }
 
     private func candidateRow(_ candidate: InstallCandidate) -> some View {
@@ -276,22 +273,23 @@ struct RuntimesView: View {
         let isInstalling = store.isBusy(key: key)
         let progress = store.progress(forKey: key)
 
-        return HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
+        return HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 7) {
                     Text(candidate.displayVersion)
-                        .font(.callout.monospacedDigit())
+                        .rowVersionFont()
 
                     if candidate.isInstalled {
                         Pill("已安装", tone: .positive, symbol: "checkmark.circle.fill")
-                    } else if let badge = candidate.badge {
+                    } else if !recommendedOnly, let badge = candidate.badge {
+                        // 已打开「仅 LTS」时每行都带同一个标记，属于噪音，这里不再重复。
                         Pill(badge, tone: .informative)
                     }
                 }
 
                 Text(candidate.subtitle)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
                 if isInstalling, let progress {
                     VStack(alignment: .leading, spacing: 4) {
@@ -300,21 +298,22 @@ struct RuntimesView: View {
                                 .progressViewStyle(.linear)
                         }
                         Text(progress.message)
-                            .font(.caption2.monospacedDigit())
+                            .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
-                    .padding(.top, 2)
+                    .padding(.top, 3)
                 }
             }
 
-            Spacer(minLength: 10)
+            Spacer(minLength: 12)
 
             if candidate.isInstalled {
-                Text("已安装")
-                    .font(.caption)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.tertiary)
+                    .accessibilityLabel("已安装")
             } else if !isInstalling {
                 Button {
                     Task { await store.install(candidate) }
@@ -392,25 +391,6 @@ struct RuntimesView: View {
                 }
             }
         )
-    }
-}
-
-struct EmptyHint: View {
-    let text: String
-    let symbol: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: symbol)
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-            Text(text)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 4)
     }
 }
 

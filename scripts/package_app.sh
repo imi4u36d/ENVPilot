@@ -49,8 +49,8 @@ chmod +x "$APP_BUNDLE/Contents/Resources/bin/envpilot-helper"
 
 # 版本号可通过环境变量注入（发布流水线用 tag 覆盖）；
 # 未设置时保持仓库内的默认值，便于本地构建。
-APP_VERSION="${APP_VERSION:-0.6.1}"
-APP_BUILD="${APP_BUILD:-4}"
+APP_VERSION="${APP_VERSION:-0.6.2}"
+APP_BUILD="${APP_BUILD:-5}"
 
 cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

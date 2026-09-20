@@ -12,31 +12,34 @@ struct ProjectsView: View {
 
     var body: some View {
         PageContainer {
-            strategyCard
-            inspectorCard
+            strategySection
+            locationSection
+            resolutionSection
             if !store.recentProjectPaths.isEmpty {
-                recentsCard
+                recentsSection
             }
         }
     }
 
-    // MARK: Strategy
+    // MARK: 版本来源
 
-    private var strategyCard: some View {
-        Card("版本来源") {
-            VStack(alignment: .leading, spacing: 10) {
-                Picker("版本来源", selection: preferenceBinding) {
-                    Text("跟随项目 .envpilot").tag(ProjectVersionPreference.followProjectFiles)
-                    Text("始终使用全局版本").tag(ProjectVersionPreference.globalDefault)
+    private var strategySection: some View {
+        GroupSection(title: "版本来源", footer: strategyHelp) {
+            GroupRow {
+                HStack(alignment: .center, spacing: 14) {
+                    Text("解析方式")
+                        .font(.callout)
+
+                    Picker("版本来源", selection: preferenceBinding) {
+                        Text("跟随项目 .envpilot").tag(ProjectVersionPreference.followProjectFiles)
+                        Text("始终使用全局版本").tag(ProjectVersionPreference.globalDefault)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+
+                    Spacer(minLength: 0)
                 }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .fixedSize()
-
-                Text(strategyHelp)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -62,11 +65,11 @@ struct ProjectsView: View {
         )
     }
 
-    // MARK: Inspector
+    // MARK: 项目目录
 
-    private var inspectorCard: some View {
-        Card(
-            "项目检查器",
+    private var locationSection: some View {
+        GroupSection(
+            title: "项目目录",
             accessory: AnyView(
                 Button {
                     chooseFolder()
@@ -77,39 +80,63 @@ struct ProjectsView: View {
                 .controlSize(.small)
             )
         ) {
-            VStack(alignment: .leading, spacing: 12) {
-                pathRow
+            GroupRow {
+                pathPicker
+            }
+        }
+    }
 
-                if store.snapshot == nil {
+    // MARK: 解析结果
+
+    private var resolutionSection: some View {
+        GroupSection(title: "解析结果", hint: resolutionHint) {
+            if store.snapshot == nil {
+                GroupRow {
                     HStack(spacing: 10) {
                         ProgressView().controlSize(.small)
                         Text("正在读取运行时信息…")
                             .font(.callout)
                             .foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
                     }
-                } else if let project = store.projectSnapshot {
-                    projectDetails(project)
-                } else {
-                    EmptyHint(
-                        text: "选择一个项目目录，即可查看它的 .envpilot 会解析出哪些版本、这些版本是否已安装。",
-                        symbol: "questionmark.circle"
-                    )
                 }
+            } else if let project = store.projectSnapshot {
+                projectDetails(project)
+            } else {
+                emptyInspector
             }
         }
     }
 
-    private var pathRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private var resolutionHint: String? {
+        guard store.snapshot != nil else {
+            return nil
+        }
+        guard store.inspectedDirectory != nil else {
+            return nil
+        }
+        guard let file = store.projectSnapshot?.envPilotFile else {
+            return "未发现 .envpilot"
+        }
+        return abbreviated(file.path)
+    }
+
+    private var pathPicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: "folder")
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
+
                 Text(store.inspectedDirectory.map { abbreviated($0.path) } ?? "未选择项目目录")
                     .font(.callout.monospaced())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(store.inspectedDirectory == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .help(store.inspectedDirectory?.path ?? "未选择项目目录")
+
                 Spacer(minLength: 6)
+
                 if store.inspectedDirectory != nil {
                     Button("清除") {
                         store.setProjectDirectory(nil)
@@ -121,12 +148,9 @@ struct ProjectsView: View {
 
             HStack(spacing: 8) {
                 TextField("或直接粘贴项目路径，例如 ~/work/my-app", text: $pathInput)
-                    .textFieldStyle(.plain)
+                    .textFieldStyle(.roundedBorder)
                     .font(.callout)
                     .onSubmit(submitPath)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                    .background(DesignColor.hairline.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
 
                 Button("检查") {
                     submitPath()
@@ -137,36 +161,42 @@ struct ProjectsView: View {
         }
     }
 
-    private func projectDetails(_ project: ProjectEnvironmentSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Divider()
+    private var emptyInspector: some View {
+        EmptyState(
+            symbol: "folder.badge.questionmark",
+            title: "还没有选择项目目录",
+            message: "选择项目根目录后，可以看到 .envpilot 会解析出哪些版本、这些版本是否已安装。"
+        ) {
+            Button("选择项目文件夹…") {
+                chooseFolder()
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
 
-            VStack(spacing: 0) {
-                ForEach(project.entries) { entry in
+    private func projectDetails(_ project: ProjectEnvironmentSnapshot) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(project.entries.enumerated()), id: \.element.id) { index, entry in
+                GroupRow(dividerAbove: index > 0) {
                     projectEntryRow(entry)
-                    if entry.id != project.entries.last?.id {
-                        Divider()
-                    }
                 }
             }
 
-            Divider()
-
-            applyRow(project)
+            RowDivider()
+            GroupRow {
+                applyRow(project)
+            }
         }
     }
 
     private func projectEntryRow(_ entry: ProjectRuntimeEntry) -> some View {
-        HStack(alignment: .center, spacing: 10) {
-            Image(systemName: entry.kind.symbol)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 18)
+        HStack(alignment: .center, spacing: 12) {
+            RuntimeBadge(kind: entry.kind, size: 26, isActive: entry.isSatisfied)
 
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
+                HStack(spacing: 7) {
                     Text(entry.kind.title)
-                        .font(.callout)
+                        .font(.callout.weight(.medium))
 
                     if !entry.usesProjectDeclaration {
                         Pill("全局", tone: .neutral)
@@ -176,19 +206,19 @@ struct ProjectsView: View {
                         if entry.isSatisfied {
                             Pill("已安装", tone: .positive, symbol: "checkmark.circle.fill")
                         } else {
-                            Pill("未安装", tone: .warning, symbol: "exclamationmark.triangle.fill")
+                            Pill("未安装", tone: .warning)
                         }
                     }
                 }
 
                 Text(entryDetail(entry))
-                    .font(.caption2.monospaced())
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .textSelection(.enabled)
             }
 
-            Spacer(minLength: 10)
+            Spacer(minLength: 12)
 
             if entry.declaredVersion != nil, !entry.isSatisfied {
                 Button("去安装") {
@@ -196,15 +226,18 @@ struct ProjectsView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+            } else if let matched = entry.matchedInstallation {
+                Text(VersionLabel.display(entry.kind, matched.version))
+                    .rowVersionFont()
+                    .foregroundStyle(.secondary)
             }
         }
-        .padding(.vertical, 9)
     }
 
     private func entryDetail(_ entry: ProjectRuntimeEntry) -> String {
         if let declared = entry.declaredVersion {
             if let matched = entry.matchedInstallation {
-                return "\(entry.kind.envPilotKey)=\(declared) → \(matched.path)"
+                return "\(entry.kind.envPilotKey)=\(declared) → \(abbreviated(matched.path))"
             }
             return "\(entry.kind.envPilotKey)=\(declared) → 本机没有该版本"
         }
@@ -251,45 +284,44 @@ struct ProjectsView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .background(DesignColor.hairline.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
+            .background(DesignColor.well, in: RoundedRectangle(cornerRadius: 6))
         }
     }
 
-    // MARK: Recents
+    // MARK: 最近项目
 
-    private var recentsCard: some View {
-        Card("最近项目") {
+    private var recentsSection: some View {
+        GroupSection(title: "最近项目") {
             VStack(spacing: 0) {
                 ForEach(Array(store.recentProjectPaths.enumerated()), id: \.offset) { index, path in
-                    if index > 0 {
-                        Divider()
-                    }
-                    HStack(spacing: 8) {
-                        Text(abbreviated(path))
-                            .font(.callout.monospaced())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Spacer(minLength: 6)
-                        Button {
-                            store.setProjectDirectory(path)
-                        } label: {
-                            Text("检查")
-                        }
-                        .buttonStyle(.borderless)
-                        .controlSize(.small)
+                    GroupRow(dividerAbove: index > 0) {
+                        HStack(spacing: 8) {
+                            Text(abbreviated(path))
+                                .font(.callout.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .help(path)
 
-                        Button {
-                            store.forgetProject(path)
-                        } label: {
-                            Image(systemName: "xmark")
+                            Spacer(minLength: 6)
+
+                            Button("检查") {
+                                store.setProjectDirectory(path)
+                            }
+                            .buttonStyle(.borderless)
+                            .controlSize(.small)
+
+                            Button {
+                                store.forgetProject(path)
+                            } label: {
+                                Image(systemName: "xmark")
+                            }
+                            .buttonStyle(.borderless)
+                            .controlSize(.small)
+                            .help("从列表移除")
+                            .accessibilityLabel("从列表移除")
                         }
-                        .buttonStyle(.borderless)
-                        .controlSize(.small)
-                        .help("从列表移除")
-                        .accessibilityLabel("从列表移除")
                     }
-                    .padding(.vertical, 8)
                 }
             }
         }
