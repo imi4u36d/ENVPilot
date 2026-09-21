@@ -33,6 +33,7 @@ struct OverviewView: View {
     }
 
     var body: some View {
+        let _ = PerfProbe.noteBody("overview")
         PageContainer {
             if store.snapshot == nil {
                 GroupSection {

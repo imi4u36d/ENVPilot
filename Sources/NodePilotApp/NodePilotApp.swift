@@ -10,6 +10,8 @@ struct ENVPilotApp: App {
         _store = StateObject(wrappedValue: store)
         MenuBarSnapshot.runIfRequested(store: store)
         WindowSnapshot.runIfRequested(store: store)
+        PerfProbe.load()
+        PerfProbe.runIfRequested(store: store)
     }
 
     var body: some Scene {

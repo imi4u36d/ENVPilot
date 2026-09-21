@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.6.4 - 2026-09-21
+
+### 主窗口
+
+- **左右两栏改用 AppKit 原生的 `NSSplitViewController`**（`Sources/NodePilotApp/NativeSidebarShell.swift`），替掉 SwiftUI 的 `NavigationSplitView`。原因：在这台机器（macOS 27）上它并不是原生实现——窗口视图树里一个 `NSSplitViewController` 都没有，只有 SwiftUI 自己拼的 `NSSplitView` + `_NSSplitViewItemViewWrapper`。那套折叠动画有两个毛病：
+  - 动画没跑完再点一次**不会反向重定向**，而是把侧边栏一步弹到目标宽度。实测折叠到 121pt 时再点一次会直接跳到 190pt，并且内容列先被铺成全宽（`minX:width = 0:1100`）再跳回来，肉眼看就是「跳一下」。
+  - 点标题栏那个开关会**直接改 AppKit 的 item**，绕过 SwiftUI 的 `columnVisibility` binding（在 binding 的 `set` 里把改动全部排队也拦不住）。
+- 换成原生实现后，打断时动画会从当前位置反向：同样 8 次连点、间隔 120ms，实测 107 个采样点里**没有任何一步跳变**（宽度 212→110 再平滑回到 212），卡顿 0 次；而且点开关不再触发整页重算（`body` 求值次数 20 → 3）。
+- 折叠开关是普通工具栏项 + 显式 target。**没有**用标准的 `NSToolbarItem.Identifier.toggleSidebar`：只要侧边栏那一栏是真正的 sidebar item，AppKit 就会把工具栏项摆到侧边栏右边界（实测 x=216），而不是紧跟红绿灯。现在按钮回到 x=76，与重做前一致。
+- 视觉不变：侧边栏宽度、分隔线位置、四个页面的内容与重做前逐像素对齐（离屏快照对比，分隔线差 1px）。
+
+### 工具
+
+- `scripts/probe.sh auto` 增加 `ENVPILOT_PERF_TRIGGER=toolbar`：直接调用标准工具栏按钮的 target/action，是现在最接近手点的入口。`auto 16 700` 是平稳对照，`auto 8 120` 复现「动画没跑完又点一次」。
+- 探针记录每一栏的 `minX:width`、`body` 求值次数、`FlatTitleBar` 压平次数，用来判断某项开销是否真的在折叠路径上。
+
+## v0.6.3 - 2026-09-21
+
+### 主窗口
+
+- 修复「折叠动画没跑完再点一次折叠按钮会跳一下」。`NavigationSplitView` 的折叠动画由 AppKit 的 `NSSplitViewItem` 驱动：动画中途改列可见性不会反向动画，而是把侧边栏一步弹到目标宽度（实测从 115pt 直接回到 220pt），内容列还会先被铺成全宽（`minX:width = 0:1100`）再跳回来。新增 `SidebarToggleGuard`：在事件到达标题栏那个按钮**之前**，把动画进行中落在工具栏上的鼠标按下吞掉，让当前动画走完。判据用分隔条的位置（既不在收起位、也不在展开位），因此不依赖动画时长。
+- 这条路径没法从 SwiftUI 侧拦：标题栏那个按钮会绕过 `columnVisibility` 的 binding 直接改 AppKit 的 `NSSplitViewItem`（在 binding 的 `set` 里把改动全部排队，界面照样被弹走），所以拦截点放在 local event monitor 上。
+
+### 工具
+
+- `scripts/probe.sh auto` 全自动量折叠动画：`auto 16 700` 是平稳对照，`auto 8 120` 复现上面那次「跳」。探针另记 `body` 求值次数、`FlatTitleBar` 压平次数与每一栏的 `minX:width`。
+
 ## v0.6.2 - 2026-09-20
 
 ### 主窗口

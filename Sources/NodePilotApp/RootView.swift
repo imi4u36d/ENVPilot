@@ -13,16 +13,45 @@ struct RootView: View {
         self.store = store
         _profileEditor = StateObject(wrappedValue: ProfileEditorModel(store: store))
         // 离屏快照需要从任意页面启动；正常运行时固定停在概览页。
-        _section = State(initialValue: WindowSnapshot.initialSection ?? .overview)
+        _section = State(initialValue: WindowSnapshot.initialSection ?? PerfProbe.settings.section ?? .overview)
     }
 
     var body: some View {
-        NavigationSplitView {
+        let _ = PerfProbe.noteBody("root")
+        // 两栏交给 AppKit 原生的 NSSplitViewController（见 `NativeSidebarShell`）：
+        // SwiftUI 的 `NavigationSplitView` 在这台机器上不是原生实现，折叠动画既不能
+        // 反向重定向、又绕过 binding，点快了就是「跳一下」。
+        NativeSidebarShell(
+            sidebar: sidebarColumn,
+            detail: detailColumnContent
+        )
+        // 铺满整个窗口高度：标题栏是隐藏的，红绿灯与那个伸缩按钮浮在侧边栏上面。
+        // （AppKit 的 `allowsFullHeightLayout` 会自己给两栏留出标题栏的安全区。）
+        .ignoresSafeArea(.container, edges: .top)
+        .flatTitleBar()
+    }
+
+    @ViewBuilder
+    private var sidebarColumn: some View {
+        if PerfProbe.simpleSidebar {
+            // 空壳：只剩两行字，侧边栏的组件（图标、渐变、页脚）全部不要
+            List {
+                Text("概览")
+                Text("运行时")
+            }
+        } else {
             sidebar
-        } detail: {
+        }
+    }
+
+    @ViewBuilder
+    private var detailColumnContent: some View {
+        if PerfProbe.simpleDetail {
+            Text("x")
+                .padding()
+        } else {
             detailColumn
         }
-        .flatTitleBar()
     }
 
     // MARK: Sidebar
@@ -45,7 +74,6 @@ struct RootView: View {
         // 整页统一成同一张白/黑台面，两栏只靠中间那条分隔线分开。
         .scrollContentBackground(.hidden)
         .background(DesignColor.canvas)
-        .navigationSplitViewColumnWidth(min: 190, ideal: 214)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             sidebarFooter
         }

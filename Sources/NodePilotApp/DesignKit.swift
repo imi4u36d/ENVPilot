@@ -250,6 +250,7 @@ final class FlatTitleBarView: NSView {
         guard let window else {
             return
         }
+        PerfProbe.noteFlatten()
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.titlebarSeparatorStyle = .none
