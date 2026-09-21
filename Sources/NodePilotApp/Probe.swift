@@ -173,24 +173,20 @@ enum PerfProbe {
     /// 沿窗口的响应链找能处理 `toggleSidebar:` 的对象。
     /// 找得到就说明这个 App 的折叠走的是 AppKit 那条路（和系统侧边栏按钮一样），
     /// 用它来触发比改 SwiftUI 状态更接近真实点击。
-    private static func sidebarTogglers(in window: NSWindow) -> [(label: String, call: () -> Void)] {
-        var found: [(String, () -> Void)] = []
-        let selector = Selector(("toggleSidebar:"))
+    ///
+    /// 返回对象本身而不是闭包：把 `AnyObject` 捕进 `@MainActor` 闭包里，Swift 6.3
+    /// 会报 `SendingRisksDataRace`（本机 6.4 不报，CI 上直接编译失败）。
+    private static func sidebarTogglers(in window: NSWindow) -> [(label: String, object: AnyObject)] {
+        var found: [(String, AnyObject)] = []
+        let selector = #selector(NSSplitViewController.toggleSidebar(_:))
 
         func check(_ object: AnyObject?, _ label: String) {
             guard let object else {
                 return
             }
             let name = String(describing: type(of: object))
-            if name.contains("NS") || name.contains("SwiftUI") {
-                if object.responds(to: selector) {
-                    found.append((("\(label): \(name)"), { [weak object] in
-                        guard let object else {
-                            return
-                        }
-                        _ = NSApp.sendAction(selector, to: object, from: nil)
-                    }))
-                }
+            if name.contains("NS") || name.contains("SwiftUI"), object.responds(to: selector) {
+                found.append(("\(label): \(name)", object))
             }
         }
 
@@ -217,7 +213,7 @@ enum PerfProbe {
     /// 不指定接收者：让 AppKit 自己沿响应链找，和系统给侧边栏按钮派发动作的方式一致。
     /// 返回值表示有没有人接手（false 就是没人管这个动作）。
     private static func chainToggle(in window: NSWindow) -> (() -> Bool) {
-        let selector = Selector(("toggleSidebar:"))
+        let selector = #selector(NSSplitViewController.toggleSidebar(_:))
         return {
             NSApp.sendAction(selector, to: nil, from: nil)
         }
@@ -241,7 +237,7 @@ enum PerfProbe {
     /// 真正能「点」的那个控件：标题栏里 `action` 为 `toggleSidebar:` 的按钮。
     /// `performClick` 走的就是鼠标点下去那条路，比向拆分视图发消息更接近真实点击。
     private static func toggleControls(in window: NSWindow) -> [NSControl] {
-        let selector = Selector(("toggleSidebar:"))
+        let selector = #selector(NSSplitViewController.toggleSidebar(_:))
         var found: [NSControl] = []
         func walk(_ view: NSView, depth: Int) {
             guard depth <= 30 else {
@@ -263,7 +259,7 @@ enum PerfProbe {
     /// 主菜单里那个 `Toggle Sidebar` 菜单项。标题栏按钮和它发的是同一个 `toggleSidebar:`，
     /// 但菜单项能拿到明确的 target，可以原样派发，是最接近点按钮的可编程入口。
     private static func toggleMenuItem() -> NSMenuItem? {
-        let selector = Selector(("toggleSidebar:"))
+        let selector = #selector(NSSplitViewController.toggleSidebar(_:))
         var result: NSMenuItem?
         func search(_ menu: NSMenu) {
             for item in menu.items {
@@ -396,7 +392,7 @@ enum PerfProbe {
 
     /// 把窗口视图树里所有控件、以及主菜单打印出来，用来定位折叠按钮。
     private static func dumpWindow(_ window: NSWindow, buttons: [NSControl]) {
-        let selector = Selector(("toggleSidebar:"))
+        let selector = #selector(NSSplitViewController.toggleSidebar(_:))
 
         func describe(_ view: NSView) -> String {
             var parts = [String(describing: type(of: view)), "frame=\(NSStringFromRect(view.frame))"]
@@ -580,7 +576,7 @@ enum PerfProbe {
             // 看当前状态决定这次是「收起」还是「展开」
             recorder.begin(phase: tracker.isSidebarOpen ? "收起" : "展开")
             if let chain = chainToggle {
-                chain()
+                _ = chain()
             } else if settings.toolbarTrigger, let toolbarToggle {
                 toolbarToggle()
             } else if settings.cgTrigger, let target = clickTarget {
@@ -594,7 +590,7 @@ enum PerfProbe {
             } else if settings.buttonTrigger, let button = buttons.first {
                 button.performClick(nil)
             } else if settings.appkitTrigger, let toggler = togglers.first {
-                toggler.call()
+                _ = NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: toggler.object, from: nil)
             } else {
                 log("没有可用的触发方式：用 TRIGGER=toolbar（标准工具栏按钮）")
             }
