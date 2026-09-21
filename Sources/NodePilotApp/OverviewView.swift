@@ -72,73 +72,27 @@ struct OverviewView: View {
 
     // MARK: 当前环境
 
+    /// 主角行：大号等宽版本号是展示的重心，版本 chip 是切换器。
+    /// 行间不用分隔线而用 hover 底色，读起来像「三个环境对象」，不是一张表格。
     private var currentEnvironmentSection: some View {
         GroupSection(title: "当前环境", hint: "全局生效") {
-            VStack(spacing: 0) {
-                ForEach(Array(store.summaries.enumerated()), id: \.element.id) { index, summary in
-                    GroupRow(dividerAbove: index > 0) {
-                        environmentRow(summary)
-                    }
+            VStack(spacing: 6) {
+                ForEach(store.summaries) { summary in
+                    EnvironmentHeroRow(
+                        summary: summary,
+                        isSwitching: store.isBusy(key: "switch:\(summary.kind.rawValue)"),
+                        isDisabled: store.isBusy,
+                        onSelect: { option in
+                            Task { await store.selectDefault(option) }
+                        },
+                        onInstall: {
+                            onOpenRuntime(summary.kind)
+                        }
+                    )
                 }
             }
+            .padding(8)
         }
-    }
-
-    private func environmentRow(_ summary: RuntimeSummary) -> some View {
-        let isSwitching = store.isBusy(key: "switch:\(summary.kind.rawValue)")
-        let isActive = summary.current != nil
-
-        return HStack(alignment: .center, spacing: 12) {
-            RuntimeBadge(kind: summary.kind, isActive: isActive)
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 7) {
-                    Text(summary.kind.title)
-                        .font(.callout.weight(.medium))
-
-                    if !summary.isCurrentValid {
-                        Pill("配置缺失", tone: .warning)
-                    }
-                }
-
-                Text(detail(for: summary))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(detail(for: summary))
-            }
-
-            Spacer(minLength: 12)
-
-            if isSwitching {
-                ProgressView()
-                    .controlSize(.small)
-            } else {
-                VersionSwitcher(
-                    kind: summary.kind,
-                    options: summary.options,
-                    selectionID: summary.current?.id,
-                    isDisabled: store.isBusy,
-                    onSelect: { option in
-                        Task { await store.selectDefault(option) }
-                    },
-                    onInstall: {
-                        onOpenRuntime(summary.kind)
-                    }
-                )
-            }
-        }
-    }
-
-    private func detail(for summary: RuntimeSummary) -> String {
-        guard !summary.options.isEmpty else {
-            return "尚未安装，安装后即可在此切换版本"
-        }
-        guard let path = summary.path else {
-            return "未选择运行时"
-        }
-        return path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
     }
 
     // MARK: 终端环境
@@ -204,6 +158,91 @@ struct OverviewView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - 主角行
+
+/// 「当前环境」里的一行：徽章 + 大号版本号 + 名称/路径 + chip 切换器。
+private struct EnvironmentHeroRow: View {
+    let summary: RuntimeSummary
+    let isSwitching: Bool
+    let isDisabled: Bool
+    let onSelect: (InstalledRuntime) -> Void
+    let onInstall: () -> Void
+
+    @State private var isHovering = false
+
+    private var isActive: Bool {
+        summary.current != nil
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            RuntimeBadge(kind: summary.kind, size: 24, isActive: isActive)
+
+            Text(isActive ? VersionLabel.display(summary.kind, summary.version) : "—")
+                .font(.system(size: 22, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(isActive ? AnyShapeStyle(Color.primary) : AnyShapeStyle(.tertiary))
+                // 固定列宽：三种运行时的名称列与 chip 列纵向对齐。
+                .frame(width: 128, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 7) {
+                    Text(summary.kind.title)
+                        .font(.callout.weight(.medium))
+
+                    if !summary.isCurrentValid {
+                        Pill("配置缺失", tone: .warning)
+                    } else if !isActive {
+                        Pill("未安装", tone: .neutral)
+                    }
+                }
+
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(detail)
+            }
+
+            Spacer(minLength: 12)
+
+            if isSwitching {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                VersionChipRow(
+                    kind: summary.kind,
+                    options: summary.options,
+                    selectionID: summary.current?.id,
+                    isDisabled: isDisabled,
+                    onSelect: onSelect,
+                    onInstall: onInstall
+                )
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(
+            DesignColor.well.opacity(isHovering ? 1 : 0),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .onHover { isHovering = $0 }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(summary.kind.title) \(isActive ? summary.version : "未安装")")
+    }
+
+    private var detail: String {
+        guard !summary.options.isEmpty else {
+            return "尚未安装，安装后即可使用"
+        }
+        guard let path = summary.path else {
+            return "未选择运行时"
+        }
+        return path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
     }
 }
 

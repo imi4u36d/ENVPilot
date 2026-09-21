@@ -843,59 +843,154 @@ struct ValueRow: View {
 /// 用原生下拉按钮而不是 `Menu`：`Menu` 在 `.borderlessButton` 样式下会把
 /// 标签里的 `Text` 提为标题、其余视图降级成前导图标，箭头会跑到版本号左边。
 /// `Picker` 得到的是标准 macOS 弹出按钮：数值在左、箭头在右，可点区域也正确。
-struct VersionSwitcher: View {
+// MARK: - 版本 chip 切换器
+
+/// 单枚版本 chip：主角行的切换控件。
+///
+/// 选中的 chip 用强调色浅底 + 强调色描边；未选中用 well 底 + 发丝线；
+/// `isDashed` 把「安装」入口渲染成虚线描边。
+struct VersionChip: View {
+    var text: String = ""
+    var symbol: String? = nil
+    var isSelected = false
+    var isDashed = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            if !text.isEmpty {
+                Text(text)
+                    .font(.system(size: 12, weight: .medium))
+                    .monospacedDigit()
+            }
+        }
+        .foregroundStyle(foreground)
+        .padding(.horizontal, 9)
+        .frame(height: 24)
+        .background(backgroundShape, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(borderColor, style: StrokeStyle(lineWidth: 1, dash: isDashed ? [3, 3] : []))
+        }
+        .help(text.isEmpty ? "更多操作" : text)
+        .accessibilityLabel(text.isEmpty ? "更多操作" : text)
+    }
+
+    private var foreground: AnyShapeStyle {
+        if isSelected {
+            return AnyShapeStyle(Color.accentColor)
+        }
+        if text.isEmpty {
+            return AnyShapeStyle(.tertiary)
+        }
+        return AnyShapeStyle(.secondary)
+    }
+
+    private var backgroundShape: AnyShapeStyle {
+        if isSelected {
+            return AnyShapeStyle(Color.accentColor.opacity(0.10))
+        }
+        return AnyShapeStyle(isDashed ? Color.clear : DesignColor.well)
+    }
+
+    private var borderColor: Color {
+        isSelected ? Color.accentColor.opacity(0.35) : DesignColor.hairline
+    }
+}
+
+/// 一排版本 chip：最多露出 3 枚，其余收进 `···` 溢出菜单；菜单里永远有「管理…」。
+/// 一个都没装时，换成虚线「安装」chip。
+struct VersionChipRow: View {
     let kind: RuntimeKind
     let options: [InstalledRuntime]
     let selectionID: String?
-    let isDisabled: Bool
+    var isDisabled: Bool
     let onSelect: (InstalledRuntime) -> Void
     var onInstall: () -> Void = {}
 
-    private static let manageTag = "__envpilot_manage__"
+    private static let maximumVisible = 3
 
     var body: some View {
-        if options.isEmpty {
-            Button {
-                onInstall()
-            } label: {
-                Label("安装", systemImage: "arrow.down.circle")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(isDisabled)
-            .help("安装 \(kind.title)")
-        } else {
-            Picker("切换 \(kind.title) 版本", selection: selectionBinding) {
-                ForEach(options) { option in
-                    Text(VersionLabel.display(kind, option.version)).tag(option.id)
+        HStack(spacing: 6) {
+            ForEach(visibleOptions, id: \.id) { option in
+                Button {
+                    onSelect(option)
+                } label: {
+                    VersionChip(
+                        text: VersionLabel.display(kind, option.version),
+                        isSelected: option.id == selectionID
+                    )
                 }
-                Divider()
-                Text("管理\(kind.title)版本…").tag(Self.manageTag)
+                .buttonStyle(.plain)
+                .disabled(isDisabled)
+                .help("切换到 \(VersionLabel.display(kind, option.version))")
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .fixedSize()
-            .disabled(isDisabled)
-            .help("切换 \(kind.title) 版本")
-            .accessibilityLabel("切换 \(kind.title) 版本")
+
+            if !options.isEmpty {
+                Menu {
+                    ForEach(overflowOptions, id: \.id) { option in
+                        Button {
+                            onSelect(option)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text(VersionLabel.display(kind, option.version))
+                                    .monospacedDigit()
+                                if option.id == selectionID {
+                                    Image(systemName: "checkmark")
+                                        .font(.caption2.weight(.semibold))
+                                }
+                            }
+                        }
+                    }
+                    if !overflowOptions.isEmpty {
+                        Divider()
+                    }
+                    Button("管理\(kind.title)版本…") {
+                        onInstall()
+                    }
+                } label: {
+                    VersionChip(symbol: "ellipsis")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .disabled(isDisabled)
+                .help("管理\(kind.title)版本")
+            } else {
+                Button {
+                    onInstall()
+                } label: {
+                    VersionChip(text: "安装", symbol: "plus", isDashed: true)
+                }
+                .buttonStyle(.plain)
+                .disabled(isDisabled)
+                .help("安装 \(kind.title)")
+            }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("切换 \(kind.title) 版本")
     }
 
-    private var selectionBinding: Binding<String> {
-        Binding(
-            get: { selectionID ?? "" },
-            set: { newValue in
-                guard newValue != Self.manageTag else {
-                    onInstall()
-                    return
-                }
-                guard let option = options.first(where: { $0.id == newValue }),
-                      option.id != selectionID else {
-                    return
-                }
-                onSelect(option)
-            }
-        )
+    /// 最多 3 枚 chip；当前版本若没排进前三，顶到最前，其余保持原顺序。
+    private var visibleOptions: [InstalledRuntime] {
+        let head = Array(options.prefix(Self.maximumVisible))
+        guard let current = options.first(where: { $0.id == selectionID }),
+              !head.contains(where: { $0.id == current.id }) else {
+            return head
+        }
+        var result = [current]
+        for option in options where option.id != current.id && result.count < Self.maximumVisible {
+            result.append(option)
+        }
+        return result
+    }
+
+    private var overflowOptions: [InstalledRuntime] {
+        let visibleIDs = Set(visibleOptions.map { $0.id })
+        return options.filter { !visibleIDs.contains($0.id) }
     }
 }
 
