@@ -44,30 +44,17 @@ struct InstallCandidate: Identifiable, Hashable {
 final class NodeRuntimeStore: ObservableObject {
     @Published private(set) var snapshot: NodeRuntimeSnapshot?
     @Published private(set) var summaries: [RuntimeSummary] = []
-    @Published private(set) var projectSnapshot: ProjectEnvironmentSnapshot?
-    @Published private(set) var inspectedDirectory: URL?
     @Published private(set) var candidates: [InstallCandidate] = []
     @Published private(set) var isLoading = false
     @Published private(set) var busyKey: String?
     @Published private(set) var progressMessage: String?
     @Published private(set) var progressFraction: Double?
     @Published private(set) var statusMessage: StatusMessage?
-    @Published private(set) var recentProjectPaths: [String]
 
     private let service: any NodeRuntimeServicing
-    private let defaults: UserDefaults
-    private var deriveTask: Task<Void, Never>?
 
-    private static let recentProjectsKey = "envpilot.recentProjectPaths"
-    private static let maxRecentProjects = 6
-
-    init(
-        service: any NodeRuntimeServicing = LocalNodeRuntimeService(),
-        defaults: UserDefaults = .standard
-    ) {
+    init(service: any NodeRuntimeServicing = LocalNodeRuntimeService()) {
         self.service = service
-        self.defaults = defaults
-        self.recentProjectPaths = defaults.stringArray(forKey: Self.recentProjectsKey) ?? []
         Task { await self.refresh() }
     }
 
@@ -117,41 +104,6 @@ final class NodeRuntimeStore: ObservableObject {
         statusMessage = nil
     }
 
-    // MARK: Project scope
-
-    func setProjectDirectory(_ path: String?) {
-        guard let path, !path.isEmpty else {
-            inspectedDirectory = nil
-            projectSnapshot = nil
-            scheduleDerive()
-            return
-        }
-        let url = URL(fileURLWithPath: path).standardizedFileURL
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            statusMessage = StatusMessage(text: "路径不存在：\(path)", tone: .error)
-            return
-        }
-        inspectedDirectory = url
-        rememberProject(url.path)
-        scheduleDerive()
-    }
-
-    func forgetProject(_ path: String) {
-        recentProjectPaths.removeAll { $0 == path }
-        defaults.set(recentProjectPaths, forKey: Self.recentProjectsKey)
-        if inspectedDirectory?.path == path {
-            setProjectDirectory(nil)
-        }
-    }
-
-    private func rememberProject(_ path: String) {
-        var paths = recentProjectPaths
-        paths.removeAll { $0 == path }
-        paths.insert(path, at: 0)
-        recentProjectPaths = Array(paths.prefix(Self.maxRecentProjects))
-        defaults.set(recentProjectPaths, forKey: Self.recentProjectsKey)
-    }
-
     // MARK: Operations
 
     func refresh() async {
@@ -163,7 +115,7 @@ final class NodeRuntimeStore: ObservableObject {
         } failure: { error in
             StatusMessage(text: "读取失败：\(error.localizedDescription)", tone: .error)
         }
-        scheduleDerive()
+        rebuildSummaries()
     }
 
     func loadCandidates(for kind: RuntimeKind, force: Bool = false) async {
@@ -265,7 +217,7 @@ final class NodeRuntimeStore: ObservableObject {
         if succeeded {
             statusMessage = StatusMessage(text: "已切换 \(title)，新开的终端将使用该版本。", tone: .notice)
         }
-        scheduleDerive()
+        rebuildSummaries()
     }
 
     func install(_ candidate: InstallCandidate) async {
@@ -294,7 +246,7 @@ final class NodeRuntimeStore: ObservableObject {
         if succeeded {
             statusMessage = StatusMessage(text: "\(candidate.title) 安装完成，可在概览中设为默认。", tone: .notice)
         }
-        scheduleDerive()
+        rebuildSummaries()
     }
 
     func uninstall(kind: RuntimeKind, version: String, path: String) async {
@@ -316,72 +268,7 @@ final class NodeRuntimeStore: ObservableObject {
         if succeeded {
             statusMessage = StatusMessage(text: "已卸载。", tone: .notice)
         }
-        scheduleDerive()
-    }
-
-    func setProjectPreference(_ preference: ProjectVersionPreference) async {
-        await runSnapshotOperation(
-            key: "preference",
-            message: "正在更新项目策略…"
-        ) { service, _ in
-            return try service.setProjectVersionPreference(preference)
-        } failure: { error in
-            StatusMessage(text: "更新失败：\(error.localizedDescription)", tone: .error)
-        }
-        scheduleDerive()
-    }
-
-    // MARK: Profiles
-
-    func setSelectedProfile(id: UUID) async {
-        let succeeded = await runSnapshotOperation(
-            key: "profile",
-            message: "正在切换环境预设…"
-        ) { service, _ in
-            return try service.setSelectedProfile(id: id)
-        } failure: { error in
-            StatusMessage(text: "切换预设失败：\(error.localizedDescription)", tone: .error)
-        }
-        if succeeded, let name = snapshot?.settings.profiles.first(where: { $0.id == id })?.name {
-            statusMessage = StatusMessage(text: "已切换到环境预设「\(name)」。", tone: .notice)
-        }
-        scheduleDerive()
-    }
-
-    @discardableResult
-    func saveProfile(_ profile: EnvironmentProfile) async -> Bool {
-        let succeeded = await runSnapshotOperation(
-            key: "profile",
-            message: "正在保存环境预设…"
-        ) { service, _ in
-            return try service.saveProfile(profile)
-        } failure: { error in
-            StatusMessage(text: "保存失败：\(error.localizedDescription)", tone: .error)
-        }
-        if succeeded {
-            statusMessage = StatusMessage(text: "环境预设「\(profile.name)」已保存。", tone: .notice)
-        }
-        scheduleDerive()
-        return succeeded
-    }
-
-    func createProfile(named name: String) async {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return
-        }
-        let succeeded = await runSnapshotOperation(
-            key: "profile",
-            message: "正在创建环境预设…"
-        ) { service, _ in
-            return try service.createProfile(named: trimmed)
-        } failure: { error in
-            StatusMessage(text: "创建失败：\(error.localizedDescription)", tone: .error)
-        }
-        if succeeded {
-            statusMessage = StatusMessage(text: "已创建环境预设「\(trimmed)」。", tone: .notice)
-        }
-        scheduleDerive()
+        rebuildSummaries()
     }
 
     // MARK: Plumbing
@@ -478,35 +365,16 @@ final class NodeRuntimeStore: ObservableObject {
         }
     }
 
-    private func scheduleDerive() {
-        deriveTask?.cancel()
+    /// 快照一变就重算三类摘要。
+    ///
+    /// 这是纯计算，没有文件 IO，所以直接算完——原先挂在后台任务上只是为了给
+    /// 「按项目目录向上查找 `.envpilot`」腾出 IO 时间，那条链路已随项目作用域一起删除。
+    private func rebuildSummaries() {
         guard let snapshot else {
-            projectSnapshot = nil
             summaries = []
             return
         }
-        guard let inspectedDirectory else {
-            projectSnapshot = nil
-            summaries = RuntimeSnapshotReader.summaries(for: snapshot, directory: nil)
-            return
-        }
-
-        deriveTask = Task { [weak self, snapshot] in
-            guard let self else {
-                return
-            }
-            let directory = inspectedDirectory
-            let derived = await Task.detached(priority: .userInitiated) { () -> ([RuntimeSummary], ProjectEnvironmentSnapshot) in
-                let summaries = RuntimeSnapshotReader.summaries(for: snapshot, directory: directory)
-                let project = ProjectInspector.inspect(directory: directory, snapshot: snapshot)
-                return (summaries, project)
-            }.value
-            guard !Task.isCancelled else {
-                return
-            }
-            self.summaries = derived.0
-            self.projectSnapshot = derived.1
-        }
+        summaries = RuntimeSnapshotReader.summaries(for: snapshot)
     }
 }
 

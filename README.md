@@ -6,12 +6,11 @@
 
 # ENVPilot
 
-ENVPilot 是一款原生 macOS 开发环境管理工具。它统一管理 Node.js、JDK 和 Python 运行时，并根据全局设置或项目中的 `.envpilot` 文件，为终端生成对应的环境。
+ENVPilot 是一款原生 macOS 开发环境管理工具。它统一管理 Node.js、JDK 和 Python 运行时，并按你在应用里选定的版本为终端生成对应的环境。
 
 - 运行时由 ENVPilot 自主管理，不依赖 Homebrew、SDKMAN、nvm、fnm 或 pyenv
 - 同时提供图形界面、`envpilot-helper` CLI 和简写命令 `ep`
-- 支持项目版本策略、环境预设与自定义环境变量
-- 菜单栏常驻入口，随时查看和切换当前生效版本
+- 菜单栏常驻入口，随时查看和切换当前生效版本；可选开机自启动、关窗后是否继续留在菜单栏
 
 ## 应用界面
 
@@ -23,25 +22,25 @@ ENVPilot 是一款原生 macOS 开发环境管理工具。它统一管理 Node.j
 | --- | --- |
 | ![菜单栏面板](docs/screenshots/menubar.png) | ![展开版本列表](docs/screenshots/menubar-expanded.png) |
 
-- 每行显示运行时、版本来源（项目声明 / 全局默认）与生效版本，点击整行展开已安装版本列表
+- 每行显示运行时与当前生效版本，点击整行展开已安装版本列表
 - 已安装版本标注来源（ENVPilot 管理 / 系统安装），当前版本打勾，选中即切换并收起面板
 - 未安装时给出明确的「未安装」状态，展开后可跳转到运行时页处理
-- 底部显示当前作用域（全局默认或具体项目路径）与窗口级操作
+- 底部是窗口级操作：主窗口、设置、退出
 
 ### 主窗口
 
-主窗口分为四个页面，左侧栏切换（⌘R 随时重新读取本机运行时）：
+主窗口分为两个页面，左侧栏切换：
 
 | 页面 | 作用 |
 | --- | --- |
-| 概览 | 当前生效的 Node / JDK / Python、版本来源、一键切换版本、终端将执行的导出语句 |
+| 概览 | 当前生效的 Node / JDK / Python、一键切换版本、终端将执行的导出语句 |
 | 运行时 | 一个页面内切换 Node / JDK / Python；已安装版本与可安装版本分区展示，支持搜索、仅 LTS 过滤与安装进度 |
-| 项目 | 项目版本策略，选择或粘贴项目目录后展示 `.envpilot` 解析出的版本、是否已安装，以及让当前终端立即生效的命令 |
-| 环境预设 | 左侧预设列表，右侧编辑 npm / pnpm / yarn registry、`NODE_OPTIONS` 与自定义环境变量 |
+
+侧边栏底部只留设置按钮。重新读取本机运行时放在「显示」菜单里，快捷键仍是 ⌘R。
 
 ![概览页](docs/screenshots/overview.png)
 
-应用设置（菜单栏入口开关、终端环境、路径与诊断信息）在 **ENVPilot ▸ 设置…** 或 ⌘, 的独立窗口中，不占用主窗口页面。
+应用设置在 **ENVPilot ▸ 设置…** 或 ⌘, 的独立窗口中，不占用主窗口页面。里面有四个开关：菜单栏入口、关闭主窗口后是否保留菜单栏图标、开机自启动（走 macOS 登录项）、以及每天自动检查更新。
 
 ## 功能
 
@@ -52,21 +51,9 @@ ENVPilot 是一款原生 macOS 开发环境管理工具。它统一管理 Node.j
 - **Python**：从 Python 官方分发查询 Python 3.8+，安装 ENVPilot 管理的 CPython，并通过 `ENVPILOT_PYTHON_HOME` 和 `PATH` 激活。
 - 已安装运行时默认保存在 `~/.envpilot/runtimes`。下载带进度显示；安装前校验归档路径，并使用暂存目录完成安全替换，替换失败会恢复原安装。
 
-### 项目感知
+### 终端环境
 
-在项目根目录创建 `.envpilot`：
-
-```dotenv
-NODE_VERSION=24.18.0
-JAVA_VERSION=17
-PYTHON_VERSION=3.13.7
-```
-
-进入项目目录后，zsh 集成会向上查找最近的 `.envpilot` 文件并激活对应版本。也可以在应用中切换为始终使用全局默认版本。
-
-### 环境预设
-
-每个预设可配置 npm、pnpm、yarn registry，`NODE_OPTIONS`，以及任意合法名称的自定义环境变量。预设切换后应用到新打开的终端。
+版本只由全局选择决定：终端环境不随所在目录变化，也没有「预设」这层间接。`envpilot-helper activate` 仍然接受 `--cwd`（已安装用户的 `~/.zshrc` 片段带着它跑），但那个参数只用于显示当前目录，不再参与选版本。
 
 ### 软件更新
 
@@ -127,17 +114,6 @@ ep available python
 ep install-node 22.17.0
 ep install-jdk 21
 ep install-python 3.13.7
-
-# 写入当前项目的 .envpilot
-ep use n 22.17.0
-ep use j 21
-ep use py 3.13.7
-
-# 管理环境预设
-ep profile list
-ep profile create "公司网络" --select
-ep profile set "公司网络" --npm-registry https://registry.example.com
-ep profile var set "公司网络" HTTPS_PROXY http://127.0.0.1:7890
 
 # 输出完整帮助
 ep help
@@ -223,7 +199,7 @@ ENVPILOT_UPDATE_PROBE=apply ENVPILOT_UPDATE_RELAUNCH=0 $APP
 
 `.github/workflows/release.yml` 在推送 `v*` tag 时自动在 `macos-26` 运行器上构建并发布：
 
-1. `swift test`（当前 56 个用例）
+1. `swift test`（当前 46 个用例）
 2. `./scripts/package_app.sh release`，用 tag 覆盖 `CFBundleShortVersionString`
 3. 校验 bundle 签名，产出 `ENVPilot.dmg` 与 `ENVPilot.zip`
 4. 创建对应的 GitHub Release 并附上产物

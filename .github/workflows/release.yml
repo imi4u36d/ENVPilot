@@ -69,6 +69,8 @@ jobs:
           codesign --verify --deep --strict "$APP"
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist"
           test -x "$APP/Contents/Resources/bin/envpilot-helper"
+          # 少了这个目录，发出去的包在中文系统上菜单全是英文
+          test -f "$APP/Contents/Resources/zh-Hans.lproj/Localizable.strings"
           ditto -c -k --sequesterRsrc --keepParent "$APP" dist/ENVPilot.zip
           ls -lh dist/ENVPilot.dmg dist/ENVPilot.zip
 

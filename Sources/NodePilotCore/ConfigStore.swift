@@ -3,6 +3,11 @@ import Foundation
 public struct ConfigStore: Sendable {
     public init() {}
 
+    /// 读 settings.json。
+    ///
+    /// 老文件里可能留着 `profiles` / `selectedProfileID` / `projectVersionPreference`
+    /// 三个键（「项目与预设」功能删除前写的）。`AppSettings` 用合成的 `Codable`，
+    /// 未知键会被直接忽略，所以不需要迁移：读得出来，下一次 `save` 也就把它们清掉了。
     public func load() throws -> AppSettings {
         let url = try settingsURL()
         let fileManager = FileManager.default
@@ -13,19 +18,7 @@ public struct ConfigStore: Sendable {
         }
 
         let data = try Data(contentsOf: url)
-        let decoder = JSONDecoder()
-        var settings = try decoder.decode(AppSettings.self, from: data)
-        var migrated = false
-        for index in settings.profiles.indices {
-            if settings.profiles[index].name == "Default" {
-                settings.profiles[index].name = "默认"
-                migrated = true
-            }
-        }
-        if migrated {
-            try save(settings)
-        }
-        return settings
+        return try JSONDecoder().decode(AppSettings.self, from: data)
     }
 
     public func save(_ settings: AppSettings) throws {

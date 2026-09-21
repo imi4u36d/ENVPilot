@@ -133,10 +133,6 @@ struct MenuBarView: View {
                             Text(kind.title)
                                 .font(.callout.weight(.medium))
                                 .foregroundStyle(.primary)
-
-                            if summary.current != nil, summary.source != .none {
-                                Pill(summary.source.label, tone: sourceTone(summary.source))
-                            }
                         }
 
                         if showsRawVersion {
@@ -277,25 +273,15 @@ struct MenuBarView: View {
         }
     }
 
-    // MARK: 作用域与状态
+    // MARK: 生效提示
 
+    /// 原来这里左边还有一行「当前作用域目录」，跟着项目作用域一起删掉了——版本只来自
+    /// 全局选择，不存在「换个目录换个版本」，那行路径已经没有信息可言。
     private var statusSection: some View {
-        HStack(spacing: 6) {
-            Text(store.inspectedDirectory.map(abbreviated) ?? "全局默认作用域")
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .help(store.inspectedDirectory?.path ?? "全局默认作用域")
-                .layoutPriority(1)
-
-            Spacer(minLength: 6)
-
-            Text("新终端生效")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.horizontal, 4)
+        Text("切换版本后，新开的终端才会用上")
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, 4)
     }
 
     // MARK: 底部操作
@@ -398,21 +384,6 @@ struct MenuBarView: View {
         picking = nil
         openWindow(id: "main")
         NSApp.activate(ignoringOtherApps: true)
-    }
-
-    private func abbreviated(_ url: URL) -> String {
-        url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
-    }
-
-    private func sourceTone(_ source: VersionSource) -> Pill.Tone {
-        switch source {
-        case .projectFile:
-            return .informative
-        case .global:
-            return .neutral
-        case .none:
-            return .warning
-        }
     }
 }
 

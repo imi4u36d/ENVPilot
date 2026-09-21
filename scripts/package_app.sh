@@ -44,13 +44,19 @@ mkdir -p "$APP_BUNDLE/Contents/Resources/bin"
 cp "$APP_BIN" "$APP_BUNDLE/Contents/MacOS/ENVPilotApp"
 cp "$HELPER_BIN" "$APP_BUNDLE/Contents/Resources/bin/envpilot-helper"
 cp "$APP_ICON" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+
+# 系统级菜单的中文靠这个 lproj 目录：macOS 只有在 bundle 里能找到
+# Contents/Resources/zh-Hans.lproj 时，才会把「关于/编辑/显示/窗口/帮助」这些
+# 系统菜单换成中文。少了它，即使系统语言是中文，菜单也全是英文。
+cp -R "$ROOT_DIR/Resources/zh-Hans.lproj" "$APP_BUNDLE/Contents/Resources/zh-Hans.lproj"
+
 chmod +x "$APP_BUNDLE/Contents/MacOS/ENVPilotApp"
 chmod +x "$APP_BUNDLE/Contents/Resources/bin/envpilot-helper"
 
 # 版本号可通过环境变量注入（发布流水线用 tag 覆盖）；
 # 未设置时保持仓库内的默认值，便于本地构建。
-APP_VERSION="${APP_VERSION:-0.6.5}"
-APP_BUILD="${APP_BUILD:-8}"
+APP_VERSION="${APP_VERSION:-0.6.6}"
+APP_BUILD="${APP_BUILD:-9}"
 
 cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -58,13 +64,18 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleDevelopmentRegion</key>
-  <string>en</string>
+  <string>zh_CN</string>
   <key>CFBundleExecutable</key>
   <string>ENVPilotApp</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
   <string>com.envpilot.app</string>
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>zh_CN</string>
+    <string>en</string>
+  </array>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>

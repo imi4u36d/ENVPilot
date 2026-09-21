@@ -24,7 +24,6 @@ private enum CLIOutputFormat {
 }
 
 private enum EffectiveVersionSource: String, Codable {
-    case projectFile
     case globalSelection
     case none
 }
@@ -40,14 +39,10 @@ private struct CLIStatusOutput: Codable {
     let selected_node_path: String
     let effective_version: String
     let effective_version_source: String
-    let project_version_preference: String
-    let selected_profile_id: String
-    let selected_profile_name: String
     let selected_java_version: String
     let selected_java_home: String
     let selected_python_version: String
     let selected_python_home: String
-    let profiles_count: Int
     let detected_node_versions: [VersionLocation]
     let detected_jdk_versions: [VersionLocation]
     let detected_python_versions: [VersionLocation]
@@ -60,7 +55,6 @@ private struct CLIStatusOutput: Codable {
     let settings_exists: Bool
     let config_path: String
     let settings_path: String
-    let selected_profile: CLIProfileDetailOutput?
 }
 
 private struct CLIDoctorCheck: Codable {
@@ -83,32 +77,16 @@ private struct CLIDoctorOutput: Codable {
     let checks: [CLIDoctorCheck]
 }
 
-private struct CLIProfileSummary: Codable {
-    let id: String
-    let name: String
-    let is_selected: Bool
-}
-
-private struct CLIProfileVariableOutput: Codable {
+/// `activate` 输出里的一个 `export`。
+private struct CLIVariableOutput: Codable {
     let key: String
     let value: String
-}
-
-private struct CLIProfileDetailOutput: Codable {
-    let id: String
-    let name: String
-    let npm_registry: String
-    let pnpm_registry: String
-    let yarn_registry: String
-    let node_options: String
-    let variables: [CLIProfileVariableOutput]
-    let is_selected: Bool
 }
 
 private struct CLIActivateOutput: Codable {
     let cwd: String
     let script: String
-    let exports: [CLIProfileVariableOutput]
+    let exports: [CLIVariableOutput]
 }
 
 private struct CLIInstallSnippetOutput: Codable {
@@ -119,18 +97,15 @@ private struct CLIInstallSnippetOutput: Codable {
 struct ENVPilotCLI {
     private let configStore: ConfigStore
     private let shellIntegration: ShellIntegrationService
-    private let projectVersionResolver: ProjectNodeVersionResolver
     private let runtimeService: NodeEnvironmentService
 
     init(
         configStore: ConfigStore = ConfigStore(),
         shellIntegration: ShellIntegrationService = ShellIntegrationService(),
-        projectVersionResolver: ProjectNodeVersionResolver = ProjectNodeVersionResolver(),
         runtimeService: NodeEnvironmentService = NodeEnvironmentService()
     ) {
         self.configStore = configStore
         self.shellIntegration = shellIntegration
-        self.projectVersionResolver = projectVersionResolver
         self.runtimeService = runtimeService
     }
 
@@ -158,18 +133,12 @@ struct ENVPilotCLI {
                 try runInstallJDK(arguments: commandArguments)
             case "install-python":
                 try runInstallPython(arguments: commandArguments)
-            case "set-profile":
-                try runSetProfile(arguments: commandArguments)
-            case "profile":
-                try runProfile(arguments: commandArguments)
             case "set-jdk":
                 try runSetJDK(arguments: commandArguments)
             case "set-python":
                 try runSetPython(arguments: commandArguments)
             case "config":
                 try runConfig(arguments: commandArguments)
-            case "use":
-                try runUse(arguments: commandArguments)
             case "list":
                 try runList(arguments: commandArguments)
             case "activate":
@@ -197,19 +166,18 @@ struct ENVPilotCLI {
     private func runStatus(arguments: [String]) throws {
         try validateOptions(
             in: arguments,
-            allowedOptions: ["--cwd", "--format", "--fields", "--include-profile"]
+            // --cwd 继续接受（已安装用户的 ~/.zshrc 片段带着它跑），但不再参与选版本。
+            allowedOptions: ["--cwd", "--format", "--fields"]
         )
         let settings = try configStore.load()
         let cwd = try parseCWD(from: arguments)
         let cwdPath = cwd?.path ?? FileManager.default.currentDirectoryPath
-        let effectiveVersion = shellIntegration.resolveEffectiveVersion(settings: settings, cwd: cwd)
-        let effectiveVersionSource = resolveEffectiveVersionSource(settings: settings, cwd: cwd)
-        let selectedProfile = shellIntegration.selectedProfile(in: settings)
+        let effectiveVersion = shellIntegration.resolveEffectiveVersion(settings: settings)
+        let effectiveVersionSource = resolveEffectiveVersionSource(settings: settings)
         let settingsPath = try configStore.settingsURL().path
         let settingsExists = FileManager.default.fileExists(atPath: settingsPath)
         let snapshot = try runtimeService.loadSnapshot()
         let format = try parseOutputFormat(from: arguments)
-        let includeProfile = parseFlagOption(name: "--include-profile", in: arguments)
         let selectedFields = try parseFieldsOption(from: arguments)
 
         let output = CLIStatusOutput(
@@ -218,14 +186,10 @@ struct ENVPilotCLI {
             selected_node_path: settings.selectedNodePath ?? "",
             effective_version: effectiveVersion ?? "",
             effective_version_source: effectiveVersionSource.rawValue,
-            project_version_preference: settings.projectVersionPreference.rawValue,
-            selected_profile_id: selectedProfile?.id.uuidString ?? "",
-            selected_profile_name: selectedProfile?.name ?? "",
             selected_java_version: settings.selectedJavaVersion ?? "",
             selected_java_home: settings.selectedJavaHome ?? "",
             selected_python_version: settings.selectedPythonVersion ?? "",
             selected_python_home: settings.selectedPythonHome ?? "",
-            profiles_count: settings.profiles.count,
             detected_node_versions: snapshot.installations.map { .init(version: $0.version, path: $0.installPath) },
             detected_jdk_versions: snapshot.javaInstallations.map { .init(version: $0.version, path: $0.homePath) },
             detected_python_versions: snapshot.pythonInstallations.map { .init(version: $0.version, path: $0.homePath) },
@@ -237,8 +201,7 @@ struct ENVPilotCLI {
             active_python_home: snapshot.activePythonHome ?? "",
             settings_exists: settingsExists,
             config_path: settingsPath,
-            settings_path: settingsPath,
-            selected_profile: includeProfile ? selectedProfile.map { profileDetailOutput(from: $0, settings: settings) } : nil
+            settings_path: settingsPath
         )
 
         if !selectedFields.isEmpty {
@@ -253,14 +216,10 @@ struct ENVPilotCLI {
             print("selected_node_path=\(output.selected_node_path)")
             print("effective_version=\(output.effective_version)")
             print("effective_version_source=\(output.effective_version_source)")
-            print("project_version_preference=\(output.project_version_preference)")
-            print("selected_profile_id=\(output.selected_profile_id)")
-            print("selected_profile_name=\(output.selected_profile_name)")
             print("selected_java_version=\(output.selected_java_version)")
             print("selected_java_home=\(output.selected_java_home)")
             print("selected_python_version=\(output.selected_python_version)")
             print("selected_python_home=\(output.selected_python_home)")
-            print("profiles_count=\(output.profiles_count)")
             print("detected_node_versions=\(output.detected_node_versions.map { "\($0.version):\($0.path)" }.joined(separator: ","))")
             print("detected_jdk_versions=\(output.detected_jdk_versions.map { "\($0.version):\($0.path)" }.joined(separator: ","))")
             print("detected_python_versions=\(output.detected_python_versions.map { "\($0.version):\($0.path)" }.joined(separator: ","))")
@@ -273,9 +232,6 @@ struct ENVPilotCLI {
             print("settings_exists=\(output.settings_exists)")
             print("config_path=\(output.config_path)")
             print("settings_path=\(output.settings_path)")
-            if includeProfile, let profile = output.selected_profile {
-                try printSelectedProfileTextLine(profile: profile)
-            }
         case .json:
             try printJSON(output)
         }
@@ -450,55 +406,6 @@ struct ENVPilotCLI {
         print("installed python \(snapshot.settings.selectedPythonVersion ?? version)")
     }
 
-    private func runSetProfile(arguments: [String]) throws {
-        try validateOptions(
-            in: arguments,
-            allowedOptions: ["--dry-run"]
-        )
-        let positionals = positionalArguments(from: arguments)
-        guard let profileRef = positionals.first else {
-            throw CLIError(
-                description: "set-profile requires <profile-name-or-id>",
-                exitCode: .usageError
-            )
-        }
-
-        let dryRun = parseFlagOption(name: "--dry-run", in: arguments)
-        var settings = try configStore.load()
-        let selectedProfile: EnvironmentProfile
-        let createdNewProfile: Bool
-
-        if let profileID = UUID(uuidString: profileRef),
-           let profile = settings.profiles.first(where: { $0.id == profileID }) {
-            selectedProfile = profile
-            createdNewProfile = false
-        } else if let profile = settings.profiles.first(where: { $0.name.caseInsensitiveCompare(profileRef) == .orderedSame }) {
-            selectedProfile = profile
-            createdNewProfile = false
-        } else {
-            let profile = EnvironmentProfile(name: profileRef)
-            selectedProfile = profile
-            createdNewProfile = true
-        }
-
-        if dryRun {
-            if createdNewProfile {
-                print("dry-run: would create new profile \(selectedProfile.name)")
-            }
-            print("dry-run: would select profile \(selectedProfile.name) (\(selectedProfile.id.uuidString))")
-            return
-        }
-
-        if createdNewProfile {
-            settings.profiles.append(selectedProfile)
-            print("created new profile \(selectedProfile.name)")
-        }
-
-        settings.selectedProfileID = selectedProfile.id
-        try configStore.save(settings)
-        print("selected profile \(selectedProfile.name) (\(selectedProfile.id.uuidString))")
-    }
-
     private func runSetJDK(arguments: [String]) throws {
         try validateOptions(
             in: arguments,
@@ -577,461 +484,6 @@ struct ENVPilotCLI {
         print("selected python \(selected.version) (\(selected.homePath))")
     }
 
-    private func runProfile(arguments: [String]) throws {
-        guard let subcommand = arguments.first else {
-            throw CLIError(
-                description: "profile requires a subcommand: list|get|create|select|delete|rename|set|var",
-                exitCode: .usageError
-            )
-        }
-
-        let subcommandArguments = Array(arguments.dropFirst())
-        switch subcommand {
-        case "list":
-            try runProfileList(arguments: subcommandArguments)
-        case "get":
-            try runProfileGet(arguments: subcommandArguments)
-        case "create":
-            try runProfileCreate(arguments: subcommandArguments)
-        case "select":
-            try runProfileSelect(arguments: subcommandArguments)
-        case "delete":
-            try runProfileDelete(arguments: subcommandArguments)
-        case "rename":
-            try runProfileRename(arguments: subcommandArguments)
-        case "set":
-            try runProfileSet(arguments: subcommandArguments)
-        case "var":
-            try runProfileVar(arguments: subcommandArguments)
-        default:
-            throw CLIError(
-                description: "Unknown profile subcommand: \(subcommand)",
-                exitCode: .usageError
-            )
-        }
-    }
-
-    private func runProfileList(arguments: [String]) throws {
-        try validateOptions(
-            in: arguments,
-            allowedOptions: ["--format"]
-        )
-        let format = try parseOutputFormat(from: arguments)
-        let settings = try configStore.load()
-        let selectedID = settings.selectedProfileID
-        let profiles = settings.profiles.map {
-            CLIProfileSummary(
-                id: $0.id.uuidString,
-                name: $0.name,
-                is_selected: selectedID == $0.id || (selectedID == nil && settings.profiles.first?.id == $0.id)
-            )
-        }
-
-        switch format {
-        case .text:
-            for profile in profiles {
-                let marker = profile.is_selected ? "*" : "-"
-                print("\(marker) \(profile.id) \(profile.name)")
-            }
-        case .json:
-            try printJSON(profiles)
-        }
-    }
-
-    private func runProfileGet(arguments: [String]) throws {
-        try validateOptions(in: arguments, allowedOptions: ["--format"])
-        let format = try parseOutputFormat(from: arguments)
-        let positionals = positionalArguments(from: arguments)
-        guard positionals.count == 1 else {
-            throw CLIError(
-                description: "profile get requires <profile-id|name>",
-                exitCode: .usageError
-            )
-        }
-
-        let settings = try configStore.load()
-        let profileIndex = try resolveProfileIndexOrThrow(reference: positionals[0], settings: settings)
-        let profile = settings.profiles[profileIndex]
-        let detail = profileDetailOutput(from: profile, settings: settings)
-
-        switch format {
-        case .text:
-            printProfileDetailText(detail)
-        case .json:
-            try printJSON(detail)
-        }
-    }
-
-    private func runProfileCreate(arguments: [String]) throws {
-        try validateOptions(in: arguments, allowedOptions: ["--format", "--select", "--dry-run"])
-        let format = try parseOutputFormat(from: arguments)
-        let select = parseFlagOption(name: "--select", in: arguments)
-        let dryRun = parseFlagOption(name: "--dry-run", in: arguments)
-        let positionals = positionalArguments(from: arguments)
-        guard positionals.count == 1 else {
-            throw CLIError(
-                description: "profile create requires <name>",
-                exitCode: .usageError
-            )
-        }
-        let name = positionals[0].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else {
-            throw CLIError(description: "profile name cannot be empty", exitCode: .usageError)
-        }
-
-        var settings = try configStore.load()
-        if settings.profiles.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
-            throw CLIError(
-                description: "profile already exists: \(name)",
-                exitCode: .usageError
-            )
-        }
-
-        let created = EnvironmentProfile(name: name)
-        var resultSettings = settings
-        resultSettings.profiles.append(created)
-        if select {
-            resultSettings.selectedProfileID = created.id
-        }
-
-        if !dryRun {
-            try configStore.save(resultSettings)
-            settings = resultSettings
-        }
-
-        let detail = profileDetailOutput(from: created, settings: resultSettings)
-        switch format {
-        case .text:
-            if dryRun {
-                print("dry-run: would create profile \(created.name) (\(created.id.uuidString))")
-                if select {
-                    print("dry-run: would select profile \(created.id.uuidString)")
-                }
-            } else {
-                print("created profile \(created.name) (\(created.id.uuidString))")
-                if select {
-                    print("selected profile \(created.name) (\(created.id.uuidString))")
-                }
-            }
-            printProfileDetailText(detail)
-        case .json:
-            try printJSON(detail)
-        }
-    }
-
-    private func runProfileSelect(arguments: [String]) throws {
-        try validateOptions(in: arguments, allowedOptions: ["--format", "--dry-run"])
-        let format = try parseOutputFormat(from: arguments)
-        let dryRun = parseFlagOption(name: "--dry-run", in: arguments)
-        let positionals = positionalArguments(from: arguments)
-        guard positionals.count == 1 else {
-            throw CLIError(
-                description: "profile select requires <profile-id|name>",
-                exitCode: .usageError
-            )
-        }
-
-        var settings = try configStore.load()
-        let index = try resolveProfileIndexOrThrow(reference: positionals[0], settings: settings)
-        let selectedProfile = settings.profiles[index]
-
-        var outputSettings = settings
-        outputSettings.selectedProfileID = selectedProfile.id
-        if !dryRun {
-            settings = outputSettings
-            try configStore.save(settings)
-        }
-
-        let detail = profileDetailOutput(from: selectedProfile, settings: outputSettings)
-        switch format {
-        case .text:
-            if dryRun {
-                print("dry-run: would select profile \(selectedProfile.name) (\(selectedProfile.id.uuidString))")
-            } else {
-                print("selected profile \(selectedProfile.name) (\(selectedProfile.id.uuidString))")
-            }
-            printProfileDetailText(detail)
-        case .json:
-            try printJSON(detail)
-        }
-    }
-
-    private func runProfileDelete(arguments: [String]) throws {
-        try validateOptions(in: arguments, allowedOptions: ["--force", "--dry-run"])
-        let force = parseFlagOption(name: "--force", in: arguments)
-        let dryRun = parseFlagOption(name: "--dry-run", in: arguments)
-        let positionals = positionalArguments(from: arguments)
-        guard positionals.count == 1 else {
-            throw CLIError(
-                description: "profile delete requires <profile-id|name>",
-                exitCode: .usageError
-            )
-        }
-
-        var settings = try configStore.load()
-        guard settings.profiles.count > 1 else {
-            throw CLIError(
-                description: "cannot delete the last profile",
-                exitCode: .usageError
-            )
-        }
-
-        let index = try resolveProfileIndexOrThrow(reference: positionals[0], settings: settings)
-        let deleting = settings.profiles[index]
-        let selectedID = selectedProfileID(in: settings)
-        let deletingSelected = deleting.id == selectedID
-        if deletingSelected && !force {
-            throw CLIError(
-                description: "deleting selected profile requires --force",
-                exitCode: .usageError
-            )
-        }
-
-        if dryRun {
-            print("dry-run: would delete profile \(deleting.name) (\(deleting.id.uuidString))")
-            if deletingSelected {
-                let fallback = settings.profiles.enumerated().first(where: { $0.offset != index })?.element
-                if let fallback {
-                    print("dry-run: would fallback selected profile to \(fallback.name) (\(fallback.id.uuidString))")
-                }
-            }
-            return
-        }
-
-        settings.profiles.remove(at: index)
-        if deletingSelected {
-            settings.selectedProfileID = settings.profiles.first?.id
-        }
-        try configStore.save(settings)
-        print("deleted profile \(deleting.name) (\(deleting.id.uuidString))")
-    }
-
-    private func runProfileRename(arguments: [String]) throws {
-        try validateOptions(in: arguments, allowedOptions: ["--dry-run"])
-        let dryRun = parseFlagOption(name: "--dry-run", in: arguments)
-        let positionals = positionalArguments(from: arguments)
-        guard positionals.count == 2 else {
-            throw CLIError(
-                description: "profile rename requires <profile-id|name> <new-name>",
-                exitCode: .usageError
-            )
-        }
-
-        let newName = positionals[1].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !newName.isEmpty else {
-            throw CLIError(description: "new profile name cannot be empty", exitCode: .usageError)
-        }
-
-        var settings = try configStore.load()
-        let index = try resolveProfileIndexOrThrow(reference: positionals[0], settings: settings)
-        let oldName = settings.profiles[index].name
-        if settings.profiles.enumerated().contains(where: {
-            $0.offset != index && $0.element.name.caseInsensitiveCompare(newName) == .orderedSame
-        }) {
-            throw CLIError(
-                description: "profile name already exists: \(newName)",
-                exitCode: .usageError
-            )
-        }
-
-        if dryRun {
-            print("dry-run: would rename profile \(oldName) -> \(newName)")
-            return
-        }
-
-        settings.profiles[index].name = newName
-        try configStore.save(settings)
-        print("renamed profile \(oldName) -> \(newName)")
-    }
-
-    private func runProfileSet(arguments: [String]) throws {
-        try validateOptions(
-            in: arguments,
-            allowedOptions: [
-                "--dry-run",
-                "--format",
-                "--npm-registry",
-                "--pnpm-registry",
-                "--yarn-registry",
-                "--node-options",
-            ]
-        )
-        let dryRun = parseFlagOption(name: "--dry-run", in: arguments)
-        let format = try parseOutputFormat(from: arguments)
-        let positionals = positionalArguments(from: arguments)
-        guard positionals.count == 1 else {
-            throw CLIError(
-                description: "profile set requires <profile-id|name>",
-                exitCode: .usageError
-            )
-        }
-
-        var settings = try configStore.load()
-        let index = try resolveProfileIndexOrThrow(reference: positionals[0], settings: settings)
-        var profile = settings.profiles[index]
-        var changes: [String] = []
-
-        if let value = try parseValueOption(name: "--npm-registry", in: arguments), profile.npmRegistry != value {
-            changes.append("npm_registry: \(profile.npmRegistry) -> \(value)")
-            profile.npmRegistry = value
-        }
-        if let value = try parseValueOption(name: "--pnpm-registry", in: arguments), profile.pnpmRegistry != value {
-            changes.append("pnpm_registry: \(profile.pnpmRegistry) -> \(value)")
-            profile.pnpmRegistry = value
-        }
-        if let value = try parseValueOption(name: "--yarn-registry", in: arguments), profile.yarnRegistry != value {
-            changes.append("yarn_registry: \(profile.yarnRegistry) -> \(value)")
-            profile.yarnRegistry = value
-        }
-        if let value = try parseValueOption(name: "--node-options", in: arguments), profile.nodeOptions != value {
-            changes.append("node_options: \(profile.nodeOptions) -> \(value)")
-            profile.nodeOptions = value
-        }
-
-        guard !changes.isEmpty else {
-            throw CLIError(
-                description: "profile set requires at least one field option",
-                exitCode: .usageError
-            )
-        }
-
-        if dryRun {
-            print("dry-run: would update profile \(profile.name) (\(profile.id.uuidString))")
-            for change in changes {
-                print("dry-run: \(change)")
-            }
-        } else {
-            settings.profiles[index] = profile
-            try configStore.save(settings)
-        }
-
-        let detail = profileDetailOutput(from: profile, settings: settings)
-        switch format {
-        case .text:
-            if !dryRun {
-                print("updated profile \(profile.name) (\(profile.id.uuidString))")
-            }
-            printProfileDetailText(detail)
-        case .json:
-            try printJSON(detail)
-        }
-    }
-
-    private func runProfileVar(arguments: [String]) throws {
-        guard let subcommand = arguments.first else {
-            throw CLIError(
-                description: "profile var requires a subcommand: set|unset|list",
-                exitCode: .usageError
-            )
-        }
-        let subArguments = Array(arguments.dropFirst())
-        switch subcommand {
-        case "set":
-            try runProfileVarSet(arguments: subArguments)
-        case "unset":
-            try runProfileVarUnset(arguments: subArguments)
-        case "list":
-            try runProfileVarList(arguments: subArguments)
-        default:
-            throw CLIError(
-                description: "Unknown profile var subcommand: \(subcommand)",
-                exitCode: .usageError
-            )
-        }
-    }
-
-    private func runProfileVarSet(arguments: [String]) throws {
-        try validateOptions(in: arguments, allowedOptions: ["--dry-run"])
-        let dryRun = parseFlagOption(name: "--dry-run", in: arguments)
-        let positionals = positionalArguments(from: arguments)
-        guard positionals.count == 3 else {
-            throw CLIError(
-                description: "profile var set requires <profile-id|name> <KEY> <VALUE>",
-                exitCode: .usageError
-            )
-        }
-        let profileRef = positionals[0]
-        let key = try normalizeVariableKey(positionals[1])
-        let value = positionals[2]
-
-        var settings = try configStore.load()
-        let index = try resolveProfileIndexOrThrow(reference: profileRef, settings: settings)
-        var profile = settings.profiles[index]
-        if let variableIndex = profile.variables.firstIndex(where: { $0.key == key }) {
-            if dryRun {
-                print("dry-run: would update variable \(key)=\(value) in profile \(profile.name)")
-                return
-            }
-            profile.variables[variableIndex].value = value
-        } else {
-            if dryRun {
-                print("dry-run: would add variable \(key)=\(value) in profile \(profile.name)")
-                return
-            }
-            profile.variables.append(.init(key: key, value: value))
-        }
-        settings.profiles[index] = profile
-        try configStore.save(settings)
-        print("updated profile variable \(key) in \(profile.name)")
-    }
-
-    private func runProfileVarUnset(arguments: [String]) throws {
-        try validateOptions(in: arguments, allowedOptions: ["--dry-run"])
-        let dryRun = parseFlagOption(name: "--dry-run", in: arguments)
-        let positionals = positionalArguments(from: arguments)
-        guard positionals.count == 2 else {
-            throw CLIError(
-                description: "profile var unset requires <profile-id|name> <KEY>",
-                exitCode: .usageError
-            )
-        }
-        let profileRef = positionals[0]
-        let key = try normalizeVariableKey(positionals[1])
-
-        var settings = try configStore.load()
-        let index = try resolveProfileIndexOrThrow(reference: profileRef, settings: settings)
-        var profile = settings.profiles[index]
-        guard let variableIndex = profile.variables.firstIndex(where: { $0.key == key }) else {
-            throw CLIError(
-                description: "profile variable not found: \(key)",
-                exitCode: .usageError
-            )
-        }
-
-        if dryRun {
-            print("dry-run: would remove variable \(key) from profile \(profile.name)")
-            return
-        }
-        profile.variables.remove(at: variableIndex)
-        settings.profiles[index] = profile
-        try configStore.save(settings)
-        print("removed profile variable \(key) from \(profile.name)")
-    }
-
-    private func runProfileVarList(arguments: [String]) throws {
-        try validateOptions(in: arguments, allowedOptions: ["--format"])
-        let format = try parseOutputFormat(from: arguments)
-        let positionals = positionalArguments(from: arguments)
-        guard positionals.count == 1 else {
-            throw CLIError(
-                description: "profile var list requires <profile-id|name>",
-                exitCode: .usageError
-            )
-        }
-        let settings = try configStore.load()
-        let index = try resolveProfileIndexOrThrow(reference: positionals[0], settings: settings)
-        let variables = settings.profiles[index].variables.map { CLIProfileVariableOutput(key: $0.key, value: $0.value) }
-
-        switch format {
-        case .text:
-            for variable in variables {
-                print("\(variable.key)=\(variable.value)")
-            }
-        case .json:
-            try printJSON(variables)
-        }
-    }
-
     private func runConfig(arguments: [String]) throws {
         guard let subcommand = arguments.first else {
             throw CLIError(
@@ -1069,11 +521,8 @@ struct ENVPilotCLI {
 
     private func runConfigGet(key: String) throws {
         let settings = try configStore.load()
-        let selectedProfile = shellIntegration.selectedProfile(in: settings)
 
         switch key {
-        case "project-version-preference":
-            print(settings.projectVersionPreference.rawValue)
         case "selected-version":
             print(settings.selectedVersion ?? "")
         case "selected-node-path":
@@ -1086,10 +535,6 @@ struct ENVPilotCLI {
             print(settings.selectedPythonVersion ?? "")
         case "selected-python-home":
             print(settings.selectedPythonHome ?? "")
-        case "selected-profile-id":
-            print(selectedProfile?.id.uuidString ?? "")
-        case "selected-profile-name":
-            print(selectedProfile?.name ?? "")
         default:
             throw CLIError(
                 description: "Unsupported config key: \(key)",
@@ -1100,17 +545,6 @@ struct ENVPilotCLI {
 
     private func runConfigSet(key: String, value: String) throws {
         switch key {
-        case "project-version-preference":
-            guard let preference = ProjectVersionPreference(rawValue: value) else {
-                throw CLIError(
-                    description: "Invalid project-version-preference: \(value). Allowed: globalDefault|followProjectFiles",
-                    exitCode: .usageError
-                )
-            }
-            var settings = try configStore.load()
-            settings.projectVersionPreference = preference
-            try configStore.save(settings)
-            print("updated project-version-preference to \(preference.rawValue)")
         case "selected-version":
             var settings = try configStore.load()
             if value == "none" {
@@ -1130,16 +564,6 @@ struct ENVPilotCLI {
             }
             try configStore.save(settings)
             print("updated selected-version")
-        case "selected-profile":
-            var settings = try configStore.load()
-            if value == "none" {
-                settings.selectedProfileID = nil
-            } else {
-                let index = try resolveProfileIndexOrThrow(reference: value, settings: settings)
-                settings.selectedProfileID = settings.profiles[index].id
-            }
-            try configStore.save(settings)
-            print("updated selected-profile")
         case "selected-java":
             var settings = try configStore.load()
             if value == "none" {
@@ -1167,46 +591,6 @@ struct ENVPilotCLI {
         default:
             throw CLIError(
                 description: "Unsupported config key: \(key)",
-                exitCode: .usageError
-            )
-        }
-    }
-
-    private func runUse(arguments: [String]) throws {
-        try validateOptions(in: arguments, allowedOptions: ["--cwd"])
-        let positionals = positionalArguments(from: arguments, optionsWithValue: ["--cwd"])
-        guard positionals.count == 2 else {
-            throw CLIError(
-                description: "use requires <n|node|j|java|jdk|py|python> <version>",
-                exitCode: .usageError
-            )
-        }
-
-        let runtime = positionals[0].lowercased()
-        let requestedVersion = positionals[1].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !requestedVersion.isEmpty else {
-            throw CLIError(description: "runtime version cannot be empty", exitCode: .usageError)
-        }
-
-        let cwd = try parseCWD(from: arguments) ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
-        let settings = try runtimeService.loadSnapshot().settings
-
-        switch runtime {
-        case "n", "node":
-            let version = try resolveCachedNodeVersionOrThrow(requestedVersion, settings: settings)
-            try writeProjectRuntimeValue(key: "NODE_VERSION", value: version, directory: cwd)
-            print("updated .envpilot: NODE_VERSION=\(version)")
-        case "j", "java", "jdk":
-            let version = try resolveCachedJavaVersionOrThrow(requestedVersion, settings: settings)
-            try writeProjectRuntimeValue(key: "JAVA_VERSION", value: version, directory: cwd)
-            print("updated .envpilot: JAVA_VERSION=\(version)")
-        case "py", "python", "python3":
-            let version = try resolveCachedPythonVersionOrThrow(requestedVersion, settings: settings)
-            try writeProjectRuntimeValue(key: "PYTHON_VERSION", value: version, directory: cwd)
-            print("updated .envpilot: PYTHON_VERSION=\(version)")
-        default:
-            throw CLIError(
-                description: "Unsupported runtime: \(positionals[0]). Allowed: n|node|j|java|jdk|py|python",
                 exitCode: .usageError
             )
         }
@@ -1259,7 +643,6 @@ struct ENVPilotCLI {
         let cwdPath = cwd?.path ?? FileManager.default.currentDirectoryPath
         let script = shellIntegration.renderActivationScript(
             settings: settings,
-            cwd: cwd,
             shell: .zsh
         )
         switch format {
@@ -1386,16 +769,9 @@ struct ENVPilotCLI {
             "--format",
             "--fields",
             "--check",
-            "--npm-registry",
-            "--pnpm-registry",
-            "--yarn-registry",
-            "--node-options",
         ]
         let resolvedFlagOptions = flagOptions ?? [
             "--dry-run",
-            "--include-profile",
-            "--select",
-            "--force",
         ]
         var skipNext = false
 
@@ -1423,14 +799,8 @@ struct ENVPilotCLI {
         return positionals
     }
 
-    private func resolveEffectiveVersionSource(settings: AppSettings, cwd: URL?) -> EffectiveVersionSource {
-        if settings.projectVersionPreference == .followProjectFiles,
-           let cwd,
-           let projectVersion = projectVersionResolver.resolveVersion(startingAt: cwd),
-           !projectVersion.isEmpty {
-            return .projectFile
-        }
-
+    /// 版本来源只剩两种：全局选中的版本，或者什么都没选。
+    private func resolveEffectiveVersionSource(settings: AppSettings) -> EffectiveVersionSource {
         if let selectedVersion = settings.selectedVersion, !selectedVersion.isEmpty {
             return .globalSelection
         }
@@ -1530,63 +900,6 @@ struct ENVPilotCLI {
         )
 
         return checks
-    }
-
-    private func profileDetailOutput(from profile: EnvironmentProfile, settings: AppSettings) -> CLIProfileDetailOutput {
-        CLIProfileDetailOutput(
-            id: profile.id.uuidString,
-            name: profile.name,
-            npm_registry: profile.npmRegistry,
-            pnpm_registry: profile.pnpmRegistry,
-            yarn_registry: profile.yarnRegistry,
-            node_options: profile.nodeOptions,
-            variables: profile.variables.map { .init(key: $0.key, value: $0.value) },
-            is_selected: selectedProfileID(in: settings) == profile.id
-        )
-    }
-
-    private func printProfileDetailText(_ detail: CLIProfileDetailOutput?) {
-        guard let detail else {
-            print("profile=")
-            return
-        }
-        print("profile.id=\(detail.id)")
-        print("profile.name=\(detail.name)")
-        print("profile.is_selected=\(detail.is_selected)")
-        print("profile.npm_registry=\(detail.npm_registry)")
-        print("profile.pnpm_registry=\(detail.pnpm_registry)")
-        print("profile.yarn_registry=\(detail.yarn_registry)")
-        print("profile.node_options=\(detail.node_options)")
-        if detail.variables.isEmpty {
-            print("profile.variables=")
-        } else {
-            let serialized = detail.variables.map { "\($0.key)=\($0.value)" }.joined(separator: ",")
-            print("profile.variables=\(serialized)")
-        }
-    }
-
-    private func printSelectedProfileTextLine(profile: CLIProfileDetailOutput) throws {
-        let encoded = try JSONEncoder().encode(profile)
-        let serialized = String(data: encoded, encoding: .utf8) ?? ""
-        print("selected_profile=\(serialized)")
-    }
-
-    private func selectedProfileID(in settings: AppSettings) -> UUID? {
-        settings.selectedProfileID ?? settings.profiles.first?.id
-    }
-
-    private func resolveProfileIndexOrThrow(reference: String, settings: AppSettings) throws -> Int {
-        if let profileID = UUID(uuidString: reference),
-           let index = settings.profiles.firstIndex(where: { $0.id == profileID }) {
-            return index
-        }
-        if let index = settings.profiles.firstIndex(where: { $0.name.caseInsensitiveCompare(reference) == .orderedSame }) {
-            return index
-        }
-        throw CLIError(
-            description: "Cannot find profile matching: \(reference)",
-            exitCode: .usageError
-        )
     }
 
     private func resolveJavaInstallationOrThrow(reference: String) throws -> JavaInstallation {
@@ -1715,50 +1028,6 @@ struct ENVPilotCLI {
         return nil
     }
 
-    private func writeProjectRuntimeValue(key: String, value: String, directory: URL) throws {
-        if value.contains(where: \.isNewline) {
-            throw CLIError(description: "\(key) cannot contain newlines", exitCode: .usageError)
-        }
-
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            throw CLIError(description: "Project directory does not exist: \(directory.path)", exitCode: .usageError)
-        }
-
-        let fileURL = directory.appendingPathComponent(".envpilot")
-        let existingContents: String
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            existingContents = try String(contentsOf: fileURL, encoding: .utf8)
-        } else {
-            existingContents = ""
-        }
-
-        var found = false
-        var lines = existingContents.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        lines = lines.map { line in
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.hasPrefix("#"),
-                  let separatorIndex = trimmed.firstIndex(of: "="),
-                  trimmed[..<separatorIndex].trimmingCharacters(in: .whitespacesAndNewlines) == key
-            else {
-                return line
-            }
-            found = true
-            return "\(key)=\(value)"
-        }
-
-        if !found {
-            if !lines.isEmpty, lines.last == "" {
-                lines.insert("\(key)=\(value)", at: lines.count - 1)
-            } else {
-                lines.append("\(key)=\(value)")
-            }
-        }
-
-        let updatedContents = lines.joined(separator: "\n")
-        try updatedContents.write(to: fileURL, atomically: true, encoding: .utf8)
-    }
-
     private func printRuntimeList(
         nodeInstallations: [NodeInstallation],
         javaInstallations: [JavaInstallation],
@@ -1841,10 +1110,10 @@ struct ENVPilotCLI {
         return normalized
     }
 
-    private func parseExports(from script: String) -> [CLIProfileVariableOutput] {
+    private func parseExports(from script: String) -> [CLIVariableOutput] {
         script
             .split(whereSeparator: \.isNewline)
-            .compactMap { rawLine -> CLIProfileVariableOutput? in
+            .compactMap { rawLine -> CLIVariableOutput? in
                 let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard line.hasPrefix("export ") else {
                     return nil
@@ -1953,10 +1222,6 @@ struct ENVPilotCLI {
             "--format",
             "--fields",
             "--check",
-            "--npm-registry",
-            "--pnpm-registry",
-            "--yarn-registry",
-            "--node-options",
         ].contains(option)
     }
 
@@ -1989,37 +1254,18 @@ struct ENVPilotCLI {
         Usage: envpilot-helper <command> [options]
 
         Commands:
-          status [--cwd <path>] [--format text|json] [--fields <k1,k2>] [--include-profile]
+          status [--cwd <path>] [--format text|json] [--fields <k1,k2>]
           doctor [--format text|json] [--check <id>]
           set-version <version> [--dry-run]
           available <n|node|j|java|jdk|py|python> [--format text|json] [--lts]
           install-node <version> [--dry-run]
           install-jdk <feature-version> [--dry-run]
           install-python <version> [--dry-run]
-          set-profile <profile-name-or-id> [--dry-run]
-          profile list [--format text|json]
-          profile get <profile-id|name> [--format text|json]
-          profile create <name> [--format text|json] [--select] [--dry-run]
-          profile select <profile-id|name> [--format text|json] [--dry-run]
-          profile delete <profile-id|name> [--force] [--dry-run]
-          profile rename <profile-id|name> <new-name> [--dry-run]
-          profile set <profile-id|name> [--npm-registry <url>] [--pnpm-registry <url>] [--yarn-registry <url>] [--node-options <value>] [--format text|json] [--dry-run]
-          profile var set <profile-id|name> <KEY> <VALUE> [--dry-run]
-          profile var unset <profile-id|name> <KEY> [--dry-run]
-          profile var list <profile-id|name> [--format text|json]
           set-jdk <version-or-home-path> [--dry-run]
           set-python <version-or-home-path> [--dry-run]
           list [n|node|j|java|py|python] [--format text|json]
-          use n <version> [--cwd <path>]
-          use j <version> [--cwd <path>]
-          use py <version> [--cwd <path>]
-          use node <version> [--cwd <path>]
-          use java <version> [--cwd <path>]
-          use python <version> [--cwd <path>]
-          config get <project-version-preference|selected-version|selected-java-version|selected-java-home|selected-python-version|selected-python-home|selected-profile-id|selected-profile-name>
-          config set project-version-preference <globalDefault|followProjectFiles>
+          config get <selected-version|selected-node-path|selected-java-version|selected-java-home|selected-python-version|selected-python-home>
           config set selected-version <version|none>
-          config set selected-profile <profile-id|name|none>
           config set selected-java <version-or-home-path|none>
           config set selected-python <version-or-home-path|none>
           activate [--cwd <path>] [--format text|json]

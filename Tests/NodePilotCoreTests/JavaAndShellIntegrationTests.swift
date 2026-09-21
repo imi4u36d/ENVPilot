@@ -23,11 +23,10 @@ final class JavaAndShellIntegrationTests: XCTestCase {
         let javaHome = "\(testManagedRuntimeRoot)/java/temurin-21.jdk/Contents/Home"
         let settings = AppSettings(
             selectedJavaVersion: "21.0.4",
-            selectedJavaHome: javaHome,
-            profiles: [EnvironmentProfile(name: "Default")]
+            selectedJavaHome: javaHome
         )
 
-        let script = integration.renderActivationScript(settings: settings, cwd: nil, shell: .zsh)
+        let script = integration.renderActivationScript(settings: settings)
 
         XCTAssertTrue(script.contains("export ENVPILOT_EFFECTIVE_JAVA_VERSION='21.0.4'"))
         XCTAssertTrue(script.contains("export JAVA_HOME='\(javaHome)'"))
@@ -39,8 +38,7 @@ final class JavaAndShellIntegrationTests: XCTestCase {
         let nodeHome = "\(testManagedRuntimeRoot)/node/14.21.3"
         let settings = AppSettings(
             selectedVersion: "14.21.3",
-            selectedNodePath: nodeHome,
-            profiles: [EnvironmentProfile(name: "Default")]
+            selectedNodePath: nodeHome
         )
         let installations = [
             NodeInstallation(
@@ -52,9 +50,7 @@ final class JavaAndShellIntegrationTests: XCTestCase {
 
         let script = integration.renderActivationScript(
             settings: settings,
-            nodeInstallations: installations,
-            cwd: nil,
-            shell: .zsh
+            nodeInstallations: installations
         )
 
         XCTAssertTrue(script.contains("export ENVPILOT_EFFECTIVE_NODE_VERSION='14.21.3'"))
@@ -63,7 +59,12 @@ final class JavaAndShellIntegrationTests: XCTestCase {
         XCTAssertFalse(script.contains("nvm use"))
     }
 
-    func testActivationScriptUsesEnvPilotJavaVersionFromProjectCache() throws {
+    /// 目录里的 `.envpilot` 不再参与选版本：终端环境只由全局选择决定。
+    ///
+    /// 这两条用例守着「项目作用域已删除」这个事实。改动前它们断言的是相反的行为
+    /// （项目声明压过全局选择），留着比删掉有用——将来谁想把目录作用域加回来，
+    /// 会先在这里撞一下。
+    func testActivationScriptIgnoresEnvPilotFileInDirectory() throws {
         let integration = ShellIntegrationService()
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -84,14 +85,14 @@ final class JavaAndShellIntegrationTests: XCTestCase {
             ]
         )
 
-        let script = integration.renderActivationScript(settings: settings, cwd: root, shell: .zsh)
+        let script = integration.renderActivationScript(settings: settings)
 
-        XCTAssertTrue(script.contains("export ENVPILOT_EFFECTIVE_JAVA_VERSION='11'"))
-        XCTAssertTrue(script.contains("export JAVA_HOME='\(java11Home)'"))
-        XCTAssertFalse(script.contains("export JAVA_HOME='\(java25Home)'"))
+        XCTAssertTrue(script.contains("export ENVPILOT_EFFECTIVE_JAVA_VERSION='25.0.2'"))
+        XCTAssertTrue(script.contains("export JAVA_HOME='\(java25Home)'"))
+        XCTAssertFalse(script.contains("export JAVA_HOME='\(java11Home)'"))
     }
 
-    func testActivationScriptDoesNotFallBackToSelectedNodeWhenProjectVersionIsMissing() throws {
+    func testActivationScriptIgnoresProjectNodeDeclaration() throws {
         let integration = ShellIntegrationService()
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -114,10 +115,10 @@ final class JavaAndShellIntegrationTests: XCTestCase {
             ]
         )
 
-        let script = integration.renderActivationScript(settings: settings, cwd: root, shell: .zsh)
+        let script = integration.renderActivationScript(settings: settings)
 
-        XCTAssertTrue(script.contains("export ENVPILOT_EFFECTIVE_NODE_VERSION='18.19.0'"))
-        XCTAssertFalse(script.contains("export ENVPILOT_NODE_HOME='\(nodeHome)'"))
+        XCTAssertTrue(script.contains("export ENVPILOT_EFFECTIVE_NODE_VERSION='24.15.0'"))
+        XCTAssertTrue(script.contains("export ENVPILOT_NODE_HOME='\(nodeHome)'"))
     }
 
     func testDetectInstallationsIncludesEnvPilotManagedJDKAndMarksCurrentAsDefault() throws {

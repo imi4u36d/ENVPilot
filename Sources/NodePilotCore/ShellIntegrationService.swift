@@ -4,61 +4,27 @@ public enum ENVPilotShellKind {
     case zsh
 }
 
+/// 生成 zsh 的激活语句。
+///
+/// 只有一条来源：全局选择的版本。「按项目目录读 `.envpilot` 覆盖版本」与「环境预设
+/// 注入 registry / 自定义变量」两条链路已整条删除，终端环境不再随所在目录变化。
+///
+/// `envpilot-helper activate` 仍然接受 `--cwd`：已安装用户 `~/.zshrc` 里的片段带着这个
+/// 参数在跑（`activate --cwd "$PWD" > … && …`，一旦不认就整条 `&&` 链不执行，终端环境
+/// 会静默失效），参数照旧解析，只是不再参与版本选择。
 public struct ShellIntegrationService {
-    private let projectVersionResolver: ProjectNodeVersionResolver
-    private let projectJavaVersionResolver: ProjectJavaVersionResolver
-    private let projectPythonVersionResolver: ProjectPythonVersionResolver
-    private let profileBuilder: ProfileEnvironmentBuilder
+    public init() {}
 
-    public init(
-        projectVersionResolver: ProjectNodeVersionResolver = ProjectNodeVersionResolver(),
-        projectJavaVersionResolver: ProjectJavaVersionResolver = ProjectJavaVersionResolver(),
-        projectPythonVersionResolver: ProjectPythonVersionResolver = ProjectPythonVersionResolver(),
-        profileBuilder: ProfileEnvironmentBuilder = ProfileEnvironmentBuilder()
-    ) {
-        self.projectVersionResolver = projectVersionResolver
-        self.projectJavaVersionResolver = projectJavaVersionResolver
-        self.projectPythonVersionResolver = projectPythonVersionResolver
-        self.profileBuilder = profileBuilder
+    public func resolveEffectiveVersion(settings: AppSettings) -> String? {
+        settings.selectedVersion
     }
 
-    public func resolveEffectiveVersion(settings: AppSettings, cwd: URL?) -> String? {
-        if settings.projectVersionPreference == .followProjectFiles, let cwd {
-            if let version = projectVersionResolver.resolveVersion(startingAt: cwd), !version.isEmpty {
-                return version
-            }
-        }
-
-        return settings.selectedVersion
+    public func resolveEffectiveJavaVersion(settings: AppSettings) -> String? {
+        settings.selectedJavaVersion
     }
 
-    public func resolveEffectiveJavaVersion(settings: AppSettings, cwd: URL?) -> String? {
-        if settings.projectVersionPreference == .followProjectFiles, let cwd {
-            if let version = projectJavaVersionResolver.resolveVersion(startingAt: cwd), !version.isEmpty {
-                return version
-            }
-        }
-
-        return settings.selectedJavaVersion
-    }
-
-    public func resolveEffectivePythonVersion(settings: AppSettings, cwd: URL?) -> String? {
-        if settings.projectVersionPreference == .followProjectFiles, let cwd {
-            if let version = projectPythonVersionResolver.resolveVersion(startingAt: cwd), !version.isEmpty {
-                return version
-            }
-        }
-
-        return settings.selectedPythonVersion
-    }
-
-    public func selectedProfile(in settings: AppSettings) -> EnvironmentProfile? {
-        if let selectedID = settings.selectedProfileID,
-           let selectedProfile = settings.profiles.first(where: { $0.id == selectedID }) {
-            return selectedProfile
-        }
-
-        return settings.profiles.first
+    public func resolveEffectivePythonVersion(settings: AppSettings) -> String? {
+        settings.selectedPythonVersion
     }
 
     public func renderActivationScript(
@@ -66,32 +32,30 @@ public struct ShellIntegrationService {
         nodeInstallations: [NodeInstallation] = [],
         javaInstallations: [JavaInstallation] = [],
         pythonInstallations: [PythonInstallation] = [],
-        cwd: URL?,
         shell: ENVPilotShellKind = .zsh
     ) -> String {
         var lines: [String] = []
         let resolvedNodeInstallations = nodeInstallations.isEmpty ? settings.cachedNodeInstallations ?? [] : nodeInstallations
         let resolvedJavaInstallations = javaInstallations.isEmpty ? settings.cachedJavaInstallations ?? [] : javaInstallations
         let resolvedPythonInstallations = pythonInstallations.isEmpty ? settings.cachedPythonInstallations ?? [] : pythonInstallations
-        let effectiveVersion = resolveEffectiveVersion(settings: settings, cwd: cwd)
+        let effectiveVersion = resolveEffectiveVersion(settings: settings)
         let effectiveNodeInstallation = resolveEffectiveNodeInstallation(
             settings: settings,
             effectiveVersion: effectiveVersion,
             installations: resolvedNodeInstallations
         )
-        let effectiveJavaVersion = resolveEffectiveJavaVersion(settings: settings, cwd: cwd)
+        let effectiveJavaVersion = resolveEffectiveJavaVersion(settings: settings)
         let effectiveJavaInstallation = resolveEffectiveJavaInstallation(
             settings: settings,
             effectiveVersion: effectiveJavaVersion,
             installations: resolvedJavaInstallations
         )
-        let effectivePythonVersion = resolveEffectivePythonVersion(settings: settings, cwd: cwd)
+        let effectivePythonVersion = resolveEffectivePythonVersion(settings: settings)
         let effectivePythonInstallation = resolveEffectivePythonInstallation(
             settings: settings,
             effectiveVersion: effectivePythonVersion,
             installations: resolvedPythonInstallations
         )
-        let profile = selectedProfile(in: settings)
 
         if let effectiveVersion {
             lines.append("export ENVPILOT_EFFECTIVE_NODE_VERSION=\(ShellSyntax.singleQuoted(effectiveVersion))")
@@ -102,9 +66,6 @@ public struct ShellIntegrationService {
         } else if let effectiveVersion, !effectiveVersion.isEmpty {
             lines.append("unset ENVPILOT_NODE_HOME")
             lines.append("echo \(ShellSyntax.singleQuoted("ENVPilot: 未找到 Node \(effectiveVersion)，请在 ENVPilot 中刷新运行时缓存。")) >&2")
-        }
-        if let profile {
-            lines.append("export ENVPILOT_ACTIVE_PROFILE=\(ShellSyntax.singleQuoted(profile.name))")
         }
         if let effectiveJavaVersion, !effectiveJavaVersion.isEmpty {
             lines.append("export ENVPILOT_EFFECTIVE_JAVA_VERSION=\(ShellSyntax.singleQuoted(effectiveJavaVersion))")
@@ -125,11 +86,6 @@ public struct ShellIntegrationService {
         } else if let effectivePythonVersion, !effectivePythonVersion.isEmpty {
             lines.append("unset ENVPILOT_PYTHON_HOME")
             lines.append("echo \(ShellSyntax.singleQuoted("ENVPilot: 未找到 Python \(effectivePythonVersion)，请在 ENVPilot 中刷新运行时缓存。")) >&2")
-        }
-
-        let exports = profileBuilder.renderExportScript(from: profile)
-        if !exports.isEmpty {
-            lines.append(exports)
         }
 
         return lines.joined(separator: "\n")

@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.6.6 - 2026-09-21
+
+### 移除：项目作用域与环境预设
+
+「项目」和「环境预设」两个页面，连同它们背后的整套机制一起删掉了——不是把入口藏起来，是把解析链路整条拆掉。
+
+- 删掉「按当前目录向上找 `.envpilot` 覆盖版本」这条链路。终端环境只由全局选择的版本决定，不再随所在目录变化。注意：这里读的从来不是 `.nvmrc` / `.java-version` / `.python-version`，只有 ENVPilot 自己的 `.envpilot`（`NODE_VERSION=` 这类键），所以删掉它不影响任何 nvm / jenv / pyenv 的兼容性。
+- 删掉环境预设：registry、`NODE_OPTIONS`、自定义环境变量的注入，以及 `$ENVPILOT_ACTIVE_PROFILE`。
+- 跟着一起删的：`ProjectNodeVersionResolver` / `ProjectJavaVersionResolver` / `ProjectPythonVersionResolver`、`ProfileEnvironmentBuilder`、`ProjectsView`、`ProfilesView`、`EnvironmentProfile` 与 `ProjectVersionPreference` 两个模型，以及 10 个相关用例（`swift test` 56 → 46）。
+- **CLI 破坏性变更**：`ep use` 与 `ep profile` 整个命令族变成 Unknown command（退出码 2）；`ep status` 不再输出 `project_version_preference` / `selected_profile_id` / `selected_profile_name` / `profiles_count` / `selected_profile`，`--include-profile` 不再接受，`--fields` 里点这些名字会直接报 `Unknown status field`。`ep config get/set` 去掉 `project-version-preference` 与 `selected-profile` 两个键。自己脚本用到上面任何一项的要改。
+- **shell 片段兼容**：`envpilot-helper activate` 仍然接受 `--cwd`。已安装用户 `~/.zshrc` 里跑的是 `activate --cwd "$PWD" > … && mv … && . …`，一旦不认这个参数，整条 `&&` 链不执行、终端环境会静默失效。参数照旧解析，只是不再参与选版本。
+- `settings.json` 里遗留的 `profiles` / `selectedProfileID` / `projectVersionPreference` 三个键不需要迁移：`AppSettings` 用合成的 `Codable`，未知键读的时候忽略，下一次保存就写没了。
+
+### 主窗口
+
+- 侧边栏底部两行小字（运行时版本摘要、「新终端生效」）和中间的刷新按钮删掉，只留更新角标与设置按钮。刷新挪进「显示」菜单，⌘R 不变。
+- 侧边栏不再分组：只剩「概览」「运行时」两项，一组两项的分组标题只是噪音。
+- 修好设置按钮。`NSApp.sendAction(Selector(("showSettingsWindow:")))` 在 macOS 27 上会返回 `true`（响应链上的 `AppDelegate` 用消息转接把动作吃掉了）但一个窗口都不开——按钮看起来就是点不动。现在改成派发主菜单里那个「设置…」项（SwiftUI 把它接在自己的 `menuAction:` 上），实测能真的开出设置窗口；两个历史选择器留作老系统的降级路径。
+
+### 菜单栏
+
+- 图标从 SF Symbol `terminal.fill` 换成跟 App 图标同一套图形（「>」折角 + 竖排三点），画成模板图，由系统按明暗菜单栏自己染色。
+- 面板里那行「当前作用域路径」跟着项目作用域一起删掉，换成一句「切换版本后，新开的终端才会用上」。
+
+### 设置
+
+- 新增「开机自启动」，走 macOS 登录项（`SMAppService.mainApp`）。裸二进制下注册不了，开关会置灰并写明原因，不假装生效。
+- 新增「关闭主窗口后保留菜单栏图标」。默认开，跟原来一样；关掉后最后一个窗口一关就退出应用（设置窗口还开着时不算最后一个窗口）。
+
+### 本地化
+
+- 系统级菜单中文化。此前 bundle 里没有任何 `.lproj`，「关于 / 编辑 / 显示 / 窗口 / 帮助」以及「Toggle Sidebar」这些系统菜单项在中文系统上仍是英文。打包时现在会带上 `Resources/zh-Hans.lproj/Localizable.strings`，并把 `CFBundleDevelopmentRegion` 改为 `zh_CN`、补上 `CFBundleLocalizations`。
+- 「Toggle Sidebar」那条的标题不走本 App 的本地化表，改成接管「帮助」菜单：折叠侧边栏挪到「显示」菜单（⌃⌘S），帮助入口换成一条中文项。
+- 顺带发现那条英文菜单项本来就是个空动作：它发的 `toggleSidebar:` 只作用于「真 sidebar item」，而本 App 用的是普通 `NSSplitViewItem`，整条响应链上没人接（`sendAction(to: nil)` 直接返回 false）。新的「切换侧边栏」改成先找出窗口背后那个 `SidebarSplitViewController`（从 `NSSplitView` 的 `delegate` 找）再直接调用它的动作——跟标题栏那个按钮同一个入口，实测能把侧边栏收起来（分隔条 218 → -2）。
+
+### 工具
+
+- `ENVPILOT_PERF_SETTINGS_PROBE=1`：配合 `ENVPILOT_PERF_DUMP=1`，直接走生产路径 `WindowActions.openSettings()` 并报告有没有真的开出设置窗口。设置入口下次再断，这条能当场照出来。
+- `ENVPILOT_LOGIN_PROBE=status|on|off`：在 `.app` 里跑，打印并切换登录项状态。开机自启动这种东西，「编译通过」和「系统真的记下了」是两件事，得能读回来才算验证过（实测 `on` 之后回读是「已开启」，`off` 之后是「未开启」）。
+- `scripts/ui_snapshot.sh` 的页面循环改为 `overview runtimes`。
+
 ## v0.6.5 - 2026-09-21
 
 ### 软件更新

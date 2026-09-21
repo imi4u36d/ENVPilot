@@ -6,23 +6,22 @@ import ENVPilotCore
 struct SettingsRootView: View {
     @ObservedObject var store: NodeRuntimeStore
     @ObservedObject var updates: AppUpdateModel
+    @ObservedObject var loginItem: LoginItemModel
     @AppStorage(AppPreferenceKey.showsMenuBarMenu) private var showsMenuBarMenu = true
-
-    private var scopeURL: URL? {
-        store.inspectedDirectory
-    }
+    @AppStorage(AppPreferenceKey.keepsMenuBarIconAfterClose) private var keepsMenuBarIconAfterClose = true
 
     private var activationScript: String {
         guard let snapshot = store.snapshot else {
             return ""
         }
-        return RuntimeSnapshotReader.activationScript(for: snapshot, directory: scopeURL)
+        return RuntimeSnapshotReader.activationScript(for: snapshot)
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 menuBarCard
+                launchCard
                 UpdateSettingsCard(model: updates)
                 terminalCard
                 storageCard
@@ -40,7 +39,7 @@ struct SettingsRootView: View {
 
     private var menuBarCard: some View {
         Card("菜单栏") {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
                 Toggle("在菜单栏显示 ENVPilot", isOn: $showsMenuBarMenu)
                     .toggleStyle(.switch)
 
@@ -48,6 +47,44 @@ struct SettingsRootView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                Divider()
+
+                Toggle("关闭主窗口后保留菜单栏图标", isOn: $keepsMenuBarIconAfterClose)
+                    .toggleStyle(.switch)
+
+                Text("开着时，关掉主窗口只是把窗口收起来，应用继续留在菜单栏；关掉后，最后一个窗口一关就退出 ENVPilot。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var launchCard: some View {
+        Card("启动") {
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle(
+                    "开机自启动",
+                    isOn: Binding(
+                        get: { loginItem.isOn },
+                        set: { loginItem.toggle($0) }
+                    )
+                )
+                .toggleStyle(.switch)
+                .disabled(!loginItem.canToggle)
+
+                if let notice = loginItem.notice {
+                    Text(notice)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("登录 macOS 后自动运行 ENVPilot（系统「登录项」）。改动立即生效，不需要重启应用。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
@@ -105,7 +142,6 @@ struct SettingsRootView: View {
         var lines: [String] = []
         lines.append("ENVPilot \(SettingsPaths.appVersion)")
         lines.append(store.statusSummary)
-        lines.append("项目目录：\(store.inspectedDirectory?.path ?? "未选择")")
         lines.append("配置文件：\(SettingsPaths.settingsFile)")
         lines.append("运行时目录：\(SettingsPaths.runtimeRoot)")
         if !activationScript.isEmpty {

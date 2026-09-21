@@ -7,8 +7,6 @@ import SwiftUI
 enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case overview
     case runtimes
-    case projects
-    case profiles
 
     var id: String { rawValue }
 
@@ -18,10 +16,6 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
             return "概览"
         case .runtimes:
             return "运行时"
-        case .projects:
-            return "项目"
-        case .profiles:
-            return "环境预设"
         }
     }
 
@@ -31,33 +25,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
             return "gauge.with.dots.needle.67percent"
         case .runtimes:
             return "square.stack.3d.up"
-        case .projects:
-            return "folder"
-        case .profiles:
-            return "slider.horizontal.3"
         }
-    }
-
-    /// 侧边栏分组标题。分组让四项导航有结构，而不是一条平铺的列表。
-    var groupTitle: String {
-        switch self {
-        case .overview, .runtimes:
-            return "环境"
-        case .projects, .profiles:
-            return "项目与预设"
-        }
-    }
-
-    static var grouped: [(title: String, sections: [AppSection])] {
-        var order: [String] = []
-        var buckets: [String: [AppSection]] = [:]
-        for section in allCases {
-            if buckets[section.groupTitle] == nil {
-                order.append(section.groupTitle)
-            }
-            buckets[section.groupTitle, default: []].append(section)
-        }
-        return order.map { ($0, buckets[$0] ?? []) }
     }
 }
 
@@ -126,13 +94,99 @@ enum RuntimeKind: String, CaseIterable, Identifiable, Hashable {
 
 @MainActor
 enum WindowActions {
+    /// 打开设置窗口。
+    ///
+    /// 先派发主菜单里那个「设置…」项。不要一上来就用 `showSettingsWindow:`：
+    /// 在 macOS 27 上它会返回 `true`（响应链上的 `AppDelegate` 用消息转接把动作吃了）
+    /// 但一个窗口都不开，界面上看就是「设置按钮点不动」。两个历史选择器只留作
+    /// 老系统的降级路径，必须排在菜单项后面。
     static func openSettings() {
-        for name in ["showSettingsWindow:", "showPreferencesWindow:"] {
-            if NSApp.sendAction(Selector((name)), to: nil, from: nil) {
+        if !performSettingsMenuItem() {
+            _ = performLegacySelector()
+        }
+        // 从菜单栏面板点进来时，本应用不一定是前台应用，设置窗口会开到别的 Space 后面。
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// 折叠/展开侧边栏。
+    ///
+    /// 没用系统的 `toggleSidebar:`：那条只作用于「真 sidebar item」，而这个 App 故意
+    /// 用了普通的 `NSSplitViewItem`（见 `NativeSidebarShell`），实测在响应链上没人接
+    /// 这个动作（`NSApp.sendAction` 直接返回 false）。真正干活的是
+    /// `SidebarToggleController.toggleSidebarAction(_:)`，标题栏那个按钮用的就是它，
+    /// 所以把同一个对象找出来直接调用，不依赖当前有没有 key window。
+    static func toggleSidebar() {
+        let windows = [NSApp.keyWindow, NSApp.mainWindow] + NSApp.windows.filter { $0.isVisible }
+        for window in windows.compactMap({ $0 }) {
+            if let target = sidebarToggleTarget(in: window) {
+                target.toggleSidebarAction(nil)
                 return
             }
         }
-        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private static func performLegacySelector() -> Bool {
+        for name in ["showSettingsWindow:", "showPreferencesWindow:"] {
+            if NSApp.sendAction(Selector((name)), to: nil, from: nil) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// 在菜单里找「设置…」并派发它的动作。
+    ///
+    /// 认法按 `⌘,` 这个快捷键来认，跟界面语言无关；标题只当兜底。
+    private static func performSettingsMenuItem() -> Bool {
+        guard let mainMenu = NSApp.mainMenu else {
+            return false
+        }
+        for topLevel in mainMenu.items {
+            guard let submenu = topLevel.submenu else {
+                continue
+            }
+            for item in submenu.items {
+                guard item.isEnabled, let action = item.action, isSettingsItem(item) else {
+                    continue
+                }
+                if NSApp.sendAction(action, to: item.target, from: item) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private static func isSettingsItem(_ item: NSMenuItem) -> Bool {
+        if item.keyEquivalent == "," && item.keyEquivalentModifierMask.contains(.command) {
+            return true
+        }
+        let title = item.title
+        return title.hasPrefix("Settings") || title.hasPrefix("设置") || title.hasPrefix("偏好设置")
+    }
+
+    /// 找到窗口背后那套负责折叠的控制器。
+    ///
+    /// 不能靠 `sendAction(..., to: nil, ...)` 沿响应链派发：实测主窗口的响应链是
+    /// 「宿主视图 -> 宿主控制器 -> 窗口 -> 窗口控制器 -> App -> AppDelegate」，我们这个
+    /// `SidebarSplitViewController` 不在上面，`window.contentViewController` 里也只有
+    /// SwiftUI 那个宿主控制器 —— 沿响应链派发等于发一个没人接的动作。
+    /// 实测稳定能拿到它的地方是 `NSSplitView` 的 `delegate`。
+    private static func sidebarToggleTarget(in window: NSWindow) -> SidebarToggleController? {
+        guard let root = window.contentView else {
+            return nil
+        }
+        var queue: [NSView] = [root]
+        var budget = 400
+        while budget > 0, let view = queue.popLast() {
+            budget -= 1
+            if let split = view as? NSSplitView, split.subviews.count >= 2,
+               let delegate = split.delegate as? SidebarToggleController {
+                return delegate
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        return nil
     }
 
     static func copy(_ text: String) {

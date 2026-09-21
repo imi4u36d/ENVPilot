@@ -22,7 +22,6 @@ enum WindowSnapshot {
     private static let sectionKey = "ENVPILOT_WINDOW_SNAPSHOT_SECTION"
     private static let sizeKey = "ENVPILOT_WINDOW_SNAPSHOT_SIZE"
     private static let schemeKey = "ENVPILOT_WINDOW_SNAPSHOT_SCHEME"
-    private static let projectKey = "ENVPILOT_WINDOW_SNAPSHOT_PROJECT"
     /// `=1` 时改为渲染设置窗口（含「软件更新」卡片）。
     private static let settingsKey = "ENVPILOT_WINDOW_SNAPSHOT_SETTINGS"
     /// 快照里注入的更新状态：`available|downloading|latest|failed`（空/缺省为不注入）。
@@ -66,7 +65,7 @@ enum WindowSnapshot {
     /// 滚动区与按钮在 `ImageRenderer` 下画不出来（按钮会变成禁止符占位）。
     private static func captureSettings(store: NodeRuntimeStore, updates: AppUpdateModel, to url: URL) async {
         await waitForRuntimeData(store)
-        let root = SettingsRootView(store: store, updates: updates)
+        let root = SettingsRootView(store: store, updates: updates, loginItem: LoginItemModel())
         let hosting = NSHostingView(rootView: root)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 600, height: 500),
@@ -113,10 +112,6 @@ enum WindowSnapshot {
 
     private static func capture(store: NodeRuntimeStore, to url: URL) async {
         await waitForRuntimeData(store)
-        if let project = ProcessInfo.processInfo.environment[projectKey], !project.isEmpty {
-            store.setProjectDirectory((project as NSString).expandingTildeInPath)
-            await waitUntil(store, timeoutMilliseconds: 4_000) { !$0.isLoading }
-        }
         // 让 SwiftUI 完成一次布局与 `.task` 触发（运行时页会在这里拉候选版本）。
         for _ in 0..<12 {
             try? await Task.sleep(nanoseconds: 150_000_000)

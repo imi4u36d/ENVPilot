@@ -111,51 +111,12 @@ public struct JavaDownloadCandidate: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
-public struct CustomEnvironmentVariable: Identifiable, Codable, Hashable, Sendable {
-    public let id: UUID
-    public var key: String
-    public var value: String
-
-    public init(id: UUID = UUID(), key: String, value: String) {
-        self.id = id
-        self.key = key
-        self.value = value
-    }
-}
-
-public struct EnvironmentProfile: Identifiable, Codable, Hashable, Sendable {
-    public let id: UUID
-    public var name: String
-    public var npmRegistry: String
-    public var pnpmRegistry: String
-    public var yarnRegistry: String
-    public var nodeOptions: String
-    public var variables: [CustomEnvironmentVariable]
-
-    public init(
-        id: UUID = UUID(),
-        name: String,
-        npmRegistry: String = "",
-        pnpmRegistry: String = "",
-        yarnRegistry: String = "",
-        nodeOptions: String = "",
-        variables: [CustomEnvironmentVariable] = []
-    ) {
-        self.id = id
-        self.name = name
-        self.npmRegistry = npmRegistry
-        self.pnpmRegistry = pnpmRegistry
-        self.yarnRegistry = yarnRegistry
-        self.nodeOptions = nodeOptions
-        self.variables = variables
-    }
-}
-
-public enum ProjectVersionPreference: String, Codable, CaseIterable, Sendable {
-    case globalDefault
-    case followProjectFiles
-}
-
+/// 终端要用的运行时版本只来自这里（全局选择）。
+///
+/// 旧版本在这里还有 `selectedProfileID` / `profiles`（环境预设）与
+/// `projectVersionPreference`（项目 `.envpilot` 文件优先）三个字段。整条「项目与预设」
+/// 链路已经删除：磁盘上的 settings.json 里可能仍留着这些键，`Codable` 合成的解码器会
+/// 忽略未知键，因此老配置照样能读，下一次保存就把它们清掉了。
 public struct AppSettings: Codable, Sendable {
     public var selectedVersion: String?
     public var selectedNodePath: String?
@@ -163,9 +124,6 @@ public struct AppSettings: Codable, Sendable {
     public var selectedJavaHome: String?
     public var selectedPythonVersion: String?
     public var selectedPythonHome: String?
-    public var selectedProfileID: UUID?
-    public var projectVersionPreference: ProjectVersionPreference
-    public var profiles: [EnvironmentProfile]
     public var cachedNodeInstallations: [NodeInstallation]?
     public var cachedJavaInstallations: [JavaInstallation]?
     public var cachedPythonInstallations: [PythonInstallation]?
@@ -177,9 +135,6 @@ public struct AppSettings: Codable, Sendable {
         selectedJavaHome: String? = nil,
         selectedPythonVersion: String? = nil,
         selectedPythonHome: String? = nil,
-        selectedProfileID: UUID? = nil,
-        projectVersionPreference: ProjectVersionPreference = .followProjectFiles,
-        profiles: [EnvironmentProfile] = AppSettings.defaultProfiles,
         cachedNodeInstallations: [NodeInstallation]? = nil,
         cachedJavaInstallations: [JavaInstallation]? = nil,
         cachedPythonInstallations: [PythonInstallation]? = nil
@@ -190,17 +145,10 @@ public struct AppSettings: Codable, Sendable {
         self.selectedJavaHome = selectedJavaHome
         self.selectedPythonVersion = selectedPythonVersion
         self.selectedPythonHome = selectedPythonHome
-        self.selectedProfileID = selectedProfileID
-        self.projectVersionPreference = projectVersionPreference
-        self.profiles = profiles
         self.cachedNodeInstallations = cachedNodeInstallations
         self.cachedJavaInstallations = cachedJavaInstallations
         self.cachedPythonInstallations = cachedPythonInstallations
     }
-
-    public static let defaultProfiles: [EnvironmentProfile] = [
-        EnvironmentProfile(name: "默认"),
-    ]
 }
 
 public struct NodeRuntimeSnapshot: Sendable {

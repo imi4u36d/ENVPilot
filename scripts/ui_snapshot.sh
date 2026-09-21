@@ -23,7 +23,7 @@ fi
 
 mkdir -p "$OUT"
 
-for section in overview runtimes projects profiles; do
+for section in overview runtimes; do
   ENVPILOT_WINDOW_SNAPSHOT="$OUT/$section-$SCHEME.png" \
   ENVPILOT_WINDOW_SNAPSHOT_SECTION="$section" \
   ENVPILOT_WINDOW_SNAPSHOT_SCHEME="$SCHEME" \

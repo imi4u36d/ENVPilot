@@ -1,0 +1,31 @@
+/* 系统级菜单里那些由 AppKit / SwiftUI 自己塞进来的条目。
+   只要 bundle 里存在 zh-Hans.lproj，标准条目（关于、服务、隐藏、编辑、拷贝、
+   显示、窗口、帮助…）就会走系统自带的中文；这里补的是那套自带翻译漏掉的几个。 */
+
+"Toggle Sidebar" = "切换侧边栏";
+"Show Sidebar" = "显示侧边栏";
+"Hide Sidebar" = "隐藏侧边栏";
+"Enter Full Screen" = "进入全屏幕";
+"Exit Full Screen" = "退出全屏幕";
+"Move Window to Left Side of Screen" = "将窗口移到屏幕左侧";
+"Move Window to Right Side of Screen" = "将窗口移到屏幕右侧";
+"Replace Tiled Window" = "替换平铺的窗口";
+"Show Menu Bar" = "显示菜单栏";
+"Hide Menu Bar" = "隐藏菜单栏";
+"Remove Window from Set" = "从组中移除窗口";
+"Bring All to Front" = "全部置于最前";
+"Arrange in Front" = "排列在最前";
+"Zoom Window" = "缩放窗口";
+"Minimize" = "最小化";
+"Zoom" = "缩放";
+"Show Tab Bar" = "显示标签栏";
+"Show All Tabs" = "显示所有标签";
+"Merge All Windows" = "合并所有窗口";
+"Start Dictation…" = "开始听写…";
+"Emoji & Symbols" = "emoji 与符号";
+"Customize Controls…" = "自定工具栏…";
+"Other…" = "其他…";
+"Show Inspector" = "显示检查器";
+"Show Settings" = "显示设置";
+"Settings…" = "设置…";
+"Settings" = "设置";

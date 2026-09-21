@@ -5,15 +5,12 @@ import SwiftUI
 struct RootView: View {
     @ObservedObject var store: NodeRuntimeStore
     @ObservedObject var updates: AppUpdateModel
-    @StateObject private var profileEditor: ProfileEditorModel
-
     @State private var section: AppSection?
     @State private var runtimeKind: RuntimeKind = .node
 
     init(store: NodeRuntimeStore, updates: AppUpdateModel) {
         self.store = store
         self.updates = updates
-        _profileEditor = StateObject(wrappedValue: ProfileEditorModel(store: store))
         // 离屏快照需要从任意页面启动；正常运行时固定停在概览页。
         _section = State(initialValue: WindowSnapshot.initialSection ?? PerfProbe.settings.section ?? .overview)
     }
@@ -62,13 +59,10 @@ struct RootView: View {
         List(selection: $section) {
             brandRow
 
-            ForEach(AppSection.grouped, id: \.title) { group in
-                Section(group.title) {
-                    ForEach(group.sections) { item in
-                        Label(item.title, systemImage: item.symbol)
-                            .tag(item)
-                    }
-                }
+            // 只剩两项，平铺即可，不再分组。
+            ForEach(AppSection.allCases) { item in
+                Label(item.title, systemImage: item.symbol)
+                    .tag(item)
             }
         }
         .listStyle(.sidebar)
@@ -116,76 +110,37 @@ struct RootView: View {
         .listRowSeparator(.hidden)
     }
 
-    /// 状态与动作都在侧边栏底部：顶部整条留给内容，不再有一个横贯窗口的工具栏。
-    /// 版本摘要独占一行，按钮挂在提示语那一行的右端，两边都放得下、都不用截断。
+    /// 侧边栏底部只放动作：更新胶囊（有新版时才有）和设置按钮。
+    ///
+    /// 原来这里是两行小字（运行时版本摘要、「新终端生效」）加一个刷新按钮，现在都删了。
+    /// 摘要跟概览页里的运行时状态重复；刷新挪到了「显示」菜单，`⌘R` 照旧能用。
     private var sidebarFooter: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 7) {
-                if store.isBusy {
-                    ProgressView()
-                        .controlSize(.small)
-                        .scaleEffect(0.7)
-                        .frame(width: 8, height: 8)
-                } else {
-                    Circle()
-                        .fill(isErrorStatus ? Color.red : Color.green.opacity(0.85))
-                        .frame(width: 6, height: 6)
-                        .accessibilityHidden(true)
-                }
-
-                Text(store.progressMessage ?? store.statusSummary)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(store.progressMessage ?? store.statusSummary)
-            }
-
-            HStack(spacing: 6) {
-                Text("新终端生效")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-
-                Spacer(minLength: 4)
-
-                if let badge = updates.badgeText {
-                    Button {
-                        WindowActions.openSettings()
-                    } label: {
-                        Pill("更新 \(badge)", tone: .warning, symbol: "arrow.down.circle")
-                    }
-                    .buttonStyle(.plain)
-                    .help("发现新版本 \(badge)，点击查看并更新")
-                }
-
-                Button {
-                    Task { await store.refresh() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .keyboardShortcut("r", modifiers: .command)
-                .disabled(store.isBusy)
-                .help("重新读取运行时信息 (⌘R)")
-                .accessibilityLabel("刷新")
-
+        HStack(spacing: 6) {
+            if let badge = updates.badgeText {
+                // 已经知道有新版本：这一行就是「一键更新」，进度在设置窗口里看。
                 Button {
                     WindowActions.openSettings()
                 } label: {
-                    Image(systemName: "gearshape")
+                    Pill("更新 \(badge)", tone: .warning, symbol: "arrow.down.circle")
                 }
-                .buttonStyle(.borderless)
-                .help("打开设置")
-                .accessibilityLabel("打开设置")
+                .buttonStyle(.plain)
+                .help("发现新版本 \(badge)，点击查看并更新")
             }
+
+            Spacer(minLength: 4)
+
+            Button {
+                WindowActions.openSettings()
+            } label: {
+                Image(systemName: "gearshape")
+            }
+            .buttonStyle(.borderless)
+            .help("打开设置")
+            .accessibilityLabel("打开设置")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(DesignColor.canvas)
-    }
-
-    private var isErrorStatus: Bool {
-        store.statusMessage?.tone == .error
     }
 
     // MARK: Detail
@@ -217,15 +172,6 @@ struct RootView: View {
         case .runtimes:
             RuntimesView(store: store, kind: $runtimeKind)
                 .id(AppSection.runtimes)
-        case .projects:
-            ProjectsView(store: store) { kind in
-                runtimeKind = kind
-                section = .runtimes
-            }
-            .id(AppSection.projects)
-        case .profiles:
-            ProfilesView(store: store, model: profileEditor)
-                .id(AppSection.profiles)
         }
     }
 }

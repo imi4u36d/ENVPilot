@@ -1,6 +1,8 @@
 import Foundation
 import ENVPilotCore
 
+/// 界面用到的一层运行时操作。只有「读取」与「按全局选择改动」两类，
+/// 没有环境预设与项目作用域相关的入口。
 protocol NodeRuntimeServicing: Sendable {
     func loadSnapshot(progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
     func listAvailableNodeVersions(ltsOnly: Bool) throws -> [NodeDownloadCandidate]
@@ -15,21 +17,15 @@ protocol NodeRuntimeServicing: Sendable {
     func installPython(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
     func uninstallPython(homePath: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
     func setDefaultPython(version: String, homePath: String) throws -> NodeRuntimeSnapshot
-    func setSelectedProfile(id: UUID) throws -> NodeRuntimeSnapshot
-    func saveProfile(_ profile: EnvironmentProfile) throws -> NodeRuntimeSnapshot
-    func createProfile(named name: String) throws -> NodeRuntimeSnapshot
-    func setProjectVersionPreference(_ preference: ProjectVersionPreference) throws -> NodeRuntimeSnapshot
 }
 
 struct LocalNodeRuntimeService: NodeRuntimeServicing {
-    private let configStore: ConfigStore
     private let environmentService: NodeEnvironmentService
 
     init(
         configStore: ConfigStore = ConfigStore(),
         commandRunner: any ShellCommandRunning = ShellCommandRunner()
     ) {
-        self.configStore = configStore
         self.environmentService = NodeEnvironmentService(
             configStore: configStore,
             shellRunner: commandRunner
@@ -86,58 +82,5 @@ struct LocalNodeRuntimeService: NodeRuntimeServicing {
 
     func setDefaultPython(version: String, homePath: String) throws -> NodeRuntimeSnapshot {
         try environmentService.selectDefaultPython(version: version, homePath: homePath)
-    }
-
-    func setSelectedProfile(id: UUID) throws -> NodeRuntimeSnapshot {
-        try environmentService.updateSelectedProfile(id)
-    }
-
-    func saveProfile(_ profile: EnvironmentProfile) throws -> NodeRuntimeSnapshot {
-        var settings = try configStore.load()
-        if let index = settings.profiles.firstIndex(where: { $0.id == profile.id }) {
-            settings.profiles[index] = profile
-        } else {
-            settings.profiles.append(profile)
-        }
-        if settings.selectedProfileID == nil {
-            settings.selectedProfileID = profile.id
-        }
-        try configStore.save(settings)
-        return try environmentService.loadSnapshot()
-    }
-
-    func createProfile(named name: String) throws -> NodeRuntimeSnapshot {
-        var settings = try configStore.load()
-        let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let base = normalized.isEmpty ? "新配置" : normalized
-        let uniqueName = uniqueProfileName(base: base, existing: settings.profiles.map(\.name))
-        let profile = EnvironmentProfile(name: uniqueName)
-        settings.profiles.append(profile)
-        settings.selectedProfileID = profile.id
-        try configStore.save(settings)
-        return try environmentService.loadSnapshot()
-    }
-
-    func setProjectVersionPreference(_ preference: ProjectVersionPreference) throws -> NodeRuntimeSnapshot {
-        var settings = try configStore.load()
-        settings.projectVersionPreference = preference
-        try configStore.save(settings)
-        return try environmentService.loadSnapshot()
-    }
-
-    private func uniqueProfileName(base: String, existing: [String]) -> String {
-        let existingLowercased = Set(existing.map { $0.lowercased() })
-        if !existingLowercased.contains(base.lowercased()) {
-            return base
-        }
-
-        var suffix = 2
-        while true {
-            let candidate = "\(base) \(suffix)"
-            if !existingLowercased.contains(candidate.lowercased()) {
-                return candidate
-            }
-            suffix += 1
-        }
     }
 }

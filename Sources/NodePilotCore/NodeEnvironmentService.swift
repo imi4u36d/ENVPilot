@@ -154,14 +154,6 @@ public final class NodeEnvironmentService: Sendable {
     }
 
     @discardableResult
-    public func updateSelectedProfile(_ profileID: UUID?) throws -> NodeRuntimeSnapshot {
-        var settings = try configStore.load()
-        settings.selectedProfileID = profileID
-        try configStore.save(settings)
-        return try loadSnapshot()
-    }
-
-    @discardableResult
     public func selectDefaultJava(version: String, homePath: String) throws -> NodeRuntimeSnapshot {
         let installations = managedJavaInstallations(from: javaDetector.detectInstallations())
         guard installations.contains(where: { $0.homePath == homePath }) else {

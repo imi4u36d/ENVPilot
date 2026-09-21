@@ -42,8 +42,10 @@ import SwiftUI
 ///   `cg` 走窗口服务器投真实 `CGEvent`（需要辅助功能权限，本机没给，实测点不动）；
 ///   `human` 在 `click` 基础上先挪光标、按下后隔 90ms 再抬起（复现真人按住的那段
 ///   嵌套 runloop）；`chain`/`appkit` 是向拆分视图发 `toggleSidebar:`（实验用，实测
-///   不等于点按钮，别拿它的数字下结论）；`menu` 走主菜单那个 `Toggle Sidebar`
-///   菜单项（实测是个空动作，谁都接不住）
+///   不等于点按钮，别拿它的数字下结论）；`menu` 找主菜单里 action 为 `toggleSidebar:`
+///   的菜单项。SwiftUI 自动塞的那条已经不要了（它本来就是空动作），换成「显示 ▸
+///   切换侧边栏」，那条走 `WindowActions.toggleSidebar()` 直接调用控制器，
+///   所以这条触发方式现在找不到任何菜单项，跑出来是 0 次折叠
 /// - `ENVPILOT_PERF_FLIPS=24` / `ENVPILOT_PERF_GAP=450` 折叠次数与间隔（毫秒）。
 ///   `GAP` 小于动画时长（~240ms）时才是「动画没跑完又点一次」的场景
 /// - `ENVPILOT_PERF_TICK_MS=5` 心跳间隔。测卡顿时别调大：间隔超过 20ms 的判定
@@ -391,7 +393,7 @@ enum PerfProbe {
     }
 
     /// 把窗口视图树里所有控件、以及主菜单打印出来，用来定位折叠按钮。
-    private static func dumpWindow(_ window: NSWindow, buttons: [NSControl]) {
+    private static func dumpWindow(_ window: NSWindow, buttons: [NSControl]) async {
         let selector = #selector(NSSplitViewController.toggleSidebar(_:))
 
         func describe(_ view: NSView) -> String {
@@ -433,6 +435,17 @@ enum PerfProbe {
                     log("  item: \(sub.title) action=\(sub.action.map(NSStringFromSelector) ?? "nil") target=\(sub.target.map { String(describing: type(of: $0)) } ?? "nil") enabled=\(sub.isEnabled)")
                 }
             }
+        }
+        if ProcessInfo.processInfo.environment["ENVPILOT_PERF_SETTINGS_PROBE"] == "1" {
+            // 设置入口的回归检查：直接走生产路径 `WindowActions.openSettings()`，
+            // 看它到底开没开出设置窗口。历史上这里坏过一次——`showSettingsWindow:`
+            // 返回 true 但什么都不做，从界面上只看得到「按钮点了没反应」。
+            let before = Set(NSApp.windows.map { "\($0.className)|\($0.title)" })
+            WindowActions.openSettings()
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            let added = NSApp.windows.map { "\($0.className)|\($0.title)" }.filter { !before.contains($0) }
+            log("=== settings probe ===")
+            log(added.isEmpty ? "  FAIL 没有新窗口（设置入口又断了）" : "  OK 新窗口: \(added.joined(separator: " / "))")
         }
         log("=== hit test at toggle button ===")
         if let button = buttons.first ?? toolbarToggleButton(in: window),
@@ -494,7 +507,7 @@ enum PerfProbe {
             split.autosaveName = nil
         }
         if settings.dump {
-            dumpWindow(window, buttons: buttons)
+            await dumpWindow(window, buttons: buttons)
             NSApp.terminate(nil)
             return
         }
@@ -781,3 +794,56 @@ final class WidthTracker {
             .joined(separator: " ")
     }
 }
+
+/// 开机自启动的一次性验证工具。默认不参与运行，只有 `ENVPILOT_LOGIN_PROBE` 给了值才生效。
+///
+/// 为什么需要它：登录项只有在 `.app` 里、带着实际签名才注册得上去，「代码编译通过」
+/// 和「系统真的把它记下了」是两件事，后者光看代码看不出来。这条把三态读出来：
+///
+/// - `ENVPILOT_LOGIN_PROBE=status` 只打印当前状态
+/// - `ENVPILOT_LOGIN_PROBE=on` / `off` 注册或注销，然后回读一次
+///
+/// 跑法（必须在 `.app` 里跑，裸二进制只会得到「不可用」）：
+/// ```bash
+/// ENVPILOT_LOGIN_PROBE=on ./dist/ENVPilot.app/Contents/MacOS/ENVPilotApp
+/// ```
+@MainActor
+enum LoginItemProbe {
+    static let environmentKey = "ENVPILOT_LOGIN_PROBE"
+
+    static func runIfRequested() {
+        guard let mode = ProcessInfo.processInfo.environment[environmentKey], !mode.isEmpty else {
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            let service = LoginItemService()
+            func line(_ text: String) {
+                FileHandle.standardError.write(Data(("login-probe: " + text + "\n").utf8))
+            }
+            line("mode=\(mode) bundle=\(Bundle.main.bundlePath)")
+            line("初始状态 \(describe(service.status()))")
+            if mode == "on" || mode == "off" {
+                switch service.setEnabled(mode == "on") {
+                case .success:
+                    line("setEnabled(\(mode == "on")) 调用成功")
+                case .failure(let error):
+                    line("setEnabled 失败 → \(error.reason)")
+                }
+                line("回读 \(describe(service.status()))")
+            }
+            NSApp.terminate(nil)
+        }
+    }
+
+    private static func describe(_ status: LoginItemService.Status) -> String {
+        switch status {
+        case .enabled:
+            return "已开启"
+        case .disabled:
+            return "未开启"
+        case .unavailable(let reason):
+            return "不可用（\(reason)）"
+        }
+    }
+}
+

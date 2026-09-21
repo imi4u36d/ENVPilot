@@ -10,19 +10,11 @@ struct OverviewView: View {
     @State private var showsScript = false
     @State private var showsPaths = false
 
-    /// 作用域只显示目录名，完整路径放 tooltip——顶栏没必要塞一整条路径。
-    private var scopeLabel: String {
-        guard let directory = store.inspectedDirectory else {
-            return "全局默认作用域"
-        }
-        return "项目 · \(directory.lastPathComponent)"
-    }
-
     private var activationScript: String {
         guard let snapshot = store.snapshot else {
             return ""
         }
-        return RuntimeSnapshotReader.activationScript(for: snapshot, directory: store.inspectedDirectory)
+        return RuntimeSnapshotReader.activationScript(for: snapshot)
     }
 
     private var exportedVariableCount: Int {
@@ -81,7 +73,7 @@ struct OverviewView: View {
     // MARK: 当前环境
 
     private var currentEnvironmentSection: some View {
-        GroupSection(title: "当前环境", hint: scopeLabel) {
+        GroupSection(title: "当前环境", hint: "全局生效") {
             VStack(spacing: 0) {
                 ForEach(Array(store.summaries.enumerated()), id: \.element.id) { index, summary in
                     GroupRow(dividerAbove: index > 0) {
@@ -94,7 +86,6 @@ struct OverviewView: View {
 
     private func environmentRow(_ summary: RuntimeSummary) -> some View {
         let isSwitching = store.isBusy(key: "switch:\(summary.kind.rawValue)")
-        let hasRuntime = !summary.options.isEmpty
         let isActive = summary.current != nil
 
         return HStack(alignment: .center, spacing: 12) {
@@ -104,10 +95,6 @@ struct OverviewView: View {
                 HStack(spacing: 7) {
                     Text(summary.kind.title)
                         .font(.callout.weight(.medium))
-
-                    if hasRuntime, summary.source != .none {
-                        sourceTag(summary.source)
-                    }
 
                     if !summary.isCurrentValid {
                         Pill("配置缺失", tone: .warning)
@@ -142,23 +129,6 @@ struct OverviewView: View {
                 )
             }
         }
-    }
-
-    /// 来源标记：一个小圆点加文字，比彩色胶囊克制得多。
-    private func sourceTag(_ source: VersionSource) -> some View {
-        HStack(spacing: 4) {
-            StatusDot(tone: sourceTone(source))
-            Text(source.label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private func sourceTone(_ source: VersionSource) -> Pill.Tone {
-        if case .projectFile = source {
-            return .informative
-        }
-        return .neutral
     }
 
     private func detail(for summary: RuntimeSummary) -> String {

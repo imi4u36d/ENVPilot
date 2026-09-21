@@ -53,7 +53,7 @@
   <path d="M168 170C168 151.222 183.222 136 202 136H218V170C218 197.614 195.614 220 168 220V170Z" fill="#0F172A" fill-opacity="0.12"/>
   <text x="94" y="286" fill="#F8FAFC" font-family="SF Pro Display, Helvetica, Arial, sans-serif" font-size="54" font-weight="700">ENVPilot</text>
   <text x="94" y="336" fill="#CBD5E1" font-family="SF Pro Display, Helvetica, Arial, sans-serif" font-size="24">macOS environment switcher for Node and JDK</text>
-  <text x="94" y="412" fill="#F8FAFC" font-family="SF Pro Text, Helvetica, Arial, sans-serif" font-size="24">• NVM-based Node install / switch / uninstall</text>
+  <text x="94" y="412" fill="#F8FAFC" font-family="SF Pro Text, Helvetica, Arial, sans-serif" font-size="24">• Managed Node / JDK / Python runtimes</text>
   <text x="94" y="454" fill="#F8FAFC" font-family="SF Pro Text, Helvetica, Arial, sans-serif" font-size="24">• Visual runtime overview with active paths</text>
-  <text x="94" y="496" fill="#F8FAFC" font-family="SF Pro Text, Helvetica, Arial, sans-serif" font-size="24">• JDK selection and profile-based environment injection</text>
+  <text x="94" y="496" fill="#F8FAFC" font-family="SF Pro Text, Helvetica, Arial, sans-serif" font-size="24">• Menu bar switcher, one version everywhere</text>
 </svg>
