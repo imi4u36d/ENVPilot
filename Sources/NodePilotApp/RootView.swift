@@ -55,30 +55,30 @@ struct RootView: View {
 
     // MARK: Sidebar
 
+    /// 侧边栏分两区，都用留白隔开而不是分隔线：
+    /// 上面的品牌区只表身份，下面的导航区只剩两项。
+    /// 原来它们挤在同一个 `List` 里，三行等高的行贴在一起，
+    /// 整块内容看起来「堆」在顶部。拆成两区之后，身份和导航各占一层，
+    /// 行与行、区与区之间都有明确的呼吸感。
     private var sidebar: some View {
-        List(selection: $section) {
-            brandRow
-
-            // 只剩两项，平铺即可，不再分组。
-            ForEach(AppSection.allCases) { item in
-                Label(item.title, systemImage: item.symbol)
-                    .tag(item)
-            }
+        VStack(spacing: 0) {
+            brandHeader
+            nav
+            Spacer(minLength: 0)
         }
-        .listStyle(.sidebar)
-        // 侧边栏默认是半透明的 sidebar 材质，铺在白/黑画布旁边会显出一块灰。
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         // 整页统一成同一张白/黑台面，两栏只靠中间那条分隔线分开。
-        .scrollContentBackground(.hidden)
         .background(DesignColor.canvas)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             sidebarFooter
         }
     }
 
-    /// 品牌行。没有 `tag`，因此在选择型 `List` 里不可选中，只作为身份标识。
-    private var brandRow: some View {
-        HStack(spacing: 9) {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+    /// 品牌区：图标 + 名称 + 一句定位，只作身份标识，不可选中。
+    /// 标题栏是隐藏的（内容铺到窗口最顶端），顶部留白要越过红绿灯。
+    private var brandHeader: some View {
+        HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(
                     LinearGradient(
                         colors: [
@@ -89,25 +89,51 @@ struct RootView: View {
                         endPoint: .bottom
                     )
                 )
-                .frame(width: 26, height: 26)
+                .frame(width: 30, height: 30)
                 .overlay {
                     Image(systemName: "terminal.fill")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.white)
                 }
 
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text("ENVPilot")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                 Text("开发环境管理")
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
 
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 2)
-        .listRowSeparator(.hidden)
+        .padding(.horizontal, 16)
+        .padding(.top, 32)
+        .padding(.bottom, 18)
+    }
+
+    /// 导航区：两项平铺，不再分组。
+    ///
+    /// 用 `SelectableRowStyle`（强调色浅底 + 圆角）替代 `List` 的全宽选中条：
+    /// 行高可以自己做主，行与行之间留出 6pt，读起来是两个独立入口而不是一条
+    /// 挤在一起的列表。
+    private var nav: some View {
+        VStack(spacing: 6) {
+            ForEach(AppSection.allCases) { item in
+                Button {
+                    section = item
+                } label: {
+                    Label(item.title, systemImage: item.symbol)
+                        .font(.system(size: 13, weight: .medium))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(SelectableRowStyle(isSelected: (section ?? .overview) == item))
+                .accessibilityAddTraits((section ?? .overview) == item ? [.isSelected] : [])
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 2)
     }
 
     /// 侧边栏底部只放动作：更新胶囊（有新版时才有）和设置按钮。
