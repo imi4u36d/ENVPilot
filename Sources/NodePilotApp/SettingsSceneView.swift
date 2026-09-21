@@ -5,6 +5,7 @@ import ENVPilotCore
 
 struct SettingsRootView: View {
     @ObservedObject var store: NodeRuntimeStore
+    @ObservedObject var updates: AppUpdateModel
     @AppStorage(AppPreferenceKey.showsMenuBarMenu) private var showsMenuBarMenu = true
 
     private var scopeURL: URL? {
@@ -22,6 +23,7 @@ struct SettingsRootView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 menuBarCard
+                UpdateSettingsCard(model: updates)
                 terminalCard
                 storageCard
             }

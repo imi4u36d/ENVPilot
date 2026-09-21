@@ -23,6 +23,10 @@ enum WindowSnapshot {
     private static let sizeKey = "ENVPILOT_WINDOW_SNAPSHOT_SIZE"
     private static let schemeKey = "ENVPILOT_WINDOW_SNAPSHOT_SCHEME"
     private static let projectKey = "ENVPILOT_WINDOW_SNAPSHOT_PROJECT"
+    /// `=1` 时改为渲染设置窗口（含「软件更新」卡片）。
+    private static let settingsKey = "ENVPILOT_WINDOW_SNAPSHOT_SETTINGS"
+    /// 快照里注入的更新状态：`available|downloading|latest|failed`（空/缺省为不注入）。
+    private static let updateStateKey = "ENVPILOT_WINDOW_SNAPSHOT_UPDATE"
 
     /// 快照请求的初始页面，供 `RootView` 在 `init` 中读取。
     static var initialSection: AppSection? {
@@ -31,15 +35,77 @@ enum WindowSnapshot {
         return AppSection(rawValue: raw)
     }
 
-    static func runIfRequested(store: NodeRuntimeStore) {
+    static func runIfRequested(store: NodeRuntimeStore, updates: AppUpdateModel) {
         guard let path = ProcessInfo.processInfo.environment[environmentKey], !path.isEmpty else {
+            return
+        }
+        let url = URL(fileURLWithPath: path)
+        // 主窗口与设置窗口都可以注入更新状态（侧边栏角标 / 软件更新卡片）。
+        applyRequestedUpdateState(to: updates)
+        if ProcessInfo.processInfo.environment[settingsKey] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                Task {
+                    await captureSettings(store: store, updates: updates, to: url)
+                    NSApp.terminate(nil)
+                }
+            }
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             Task {
-                await capture(store: store, to: URL(fileURLWithPath: path))
+                await capture(store: store, to: url)
                 NSApp.terminate(nil)
             }
+        }
+    }
+
+    // MARK: Settings window
+
+    /// 设置窗口没有主窗口那套 `Window` 场景宿主，这里自己起一个窗口渲染真实的
+    /// `SettingsRootView`。用 `cacheDisplay` 而不是 `ImageRenderer`：卡片里的
+    /// 滚动区与按钮在 `ImageRenderer` 下画不出来（按钮会变成禁止符占位）。
+    private static func captureSettings(store: NodeRuntimeStore, updates: AppUpdateModel, to url: URL) async {
+        await waitForRuntimeData(store)
+        let root = SettingsRootView(store: store, updates: updates)
+        let hosting = NSHostingView(rootView: root)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 500),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hosting
+        if let scheme = requestedScheme() {
+            window.appearance = NSAppearance(named: scheme)
+        }
+        window.orderFrontRegardless()
+
+        for _ in 0..<10 {
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+        }
+        guard let view = window.contentView else {
+            log("settings snapshot: no content view")
+            return
+        }
+        emit(view, to: url)
+        window.orderOut(nil)
+    }
+
+    /// 快照用的状态注入，完全不联网。
+    private static func applyRequestedUpdateState(to updates: AppUpdateModel) {
+        switch ProcessInfo.processInfo.environment[updateStateKey]?.lowercased() {
+        case "available":
+            updates.applyPreviewPhase(.available(UpdateProbe.previewRelease(version: "0.6.5")))
+        case "downloading":
+            updates.applyPreviewPhase(.downloading(message: "正在下载 ENVPilot 0.6.5 42% · 1.6 MB/s", fraction: 0.42))
+        case "failed":
+            updates.applyPreviewPhase(.failed("无法访问 https://api.github.com/repos/imi4u36d/ENVPilot/releases/latest：The Internet connection appears to be offline."))
+        case .some(let other) where !other.isEmpty:
+            updates.applyPreviewPhase(.upToDate(current: updates.currentVersion, latest: updates.currentVersion))
+        default:
+            break
         }
     }
 

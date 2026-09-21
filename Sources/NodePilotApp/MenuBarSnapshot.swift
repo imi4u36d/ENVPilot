@@ -18,13 +18,18 @@ enum MenuBarSnapshot {
     static let environmentKey = "ENVPILOT_MENUBAR_SNAPSHOT"
 
     /// 入口：只有设置了环境变量才介入，且延迟到应用启动完成后再渲染。
-    static func runIfRequested(store: NodeRuntimeStore) {
+    static func runIfRequested(store: NodeRuntimeStore, updates: AppUpdateModel) {
         guard let path = ProcessInfo.processInfo.environment[environmentKey], !path.isEmpty else {
             return
         }
+        // `ENVPILOT_MENUBAR_SNAPSHOT_UPDATE=0.6.5` 造一个「有新版本」的面板，
+        // 用来验收「更新到 …」那一行。不联网，纯状态注入。
+        if let version = ProcessInfo.processInfo.environment["ENVPILOT_MENUBAR_SNAPSHOT_UPDATE"], !version.isEmpty {
+            updates.applyPreviewRelease(UpdateProbe.previewRelease(version: version))
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
             Task {
-                await render(store: store, to: URL(fileURLWithPath: path))
+                await render(store: store, updates: updates, to: URL(fileURLWithPath: path))
                 NSApp.terminate(nil)
             }
         }
@@ -32,28 +37,28 @@ enum MenuBarSnapshot {
 
     // MARK: Rendering
 
-    private static func render(store: NodeRuntimeStore, to url: URL) async {
+    private static func render(store: NodeRuntimeStore, updates: AppUpdateModel, to url: URL) async {
         await waitForRuntimeData(store)
 
-        emit(renderLayer(store: store, scheme: .light), to: urlVariant(url, suffix: ""))
-        emit(renderLayer(store: store, scheme: .dark), to: urlVariant(url, suffix: "-dark"))
+        emit(renderLayer(store: store, updates: updates, scheme: .light), to: urlVariant(url, suffix: ""))
+        emit(renderLayer(store: store, updates: updates, scheme: .dark), to: urlVariant(url, suffix: "-dark"))
     }
 
     /// 直接渲染真实的 `MenuBarView`（含面板外观）。刻意不绕过 `body`：
     /// 面板塌成细缝这类问题只出现在根部容器上，快照必须覆盖同一棵树。
-    private static func renderLayer(store: NodeRuntimeStore, scheme: ColorScheme) -> CGImage? {
-        let renderer = ImageRenderer(content: snapshotLayer(store: store, scheme: scheme))
+    private static func renderLayer(store: NodeRuntimeStore, updates: AppUpdateModel, scheme: ColorScheme) -> CGImage? {
+        let renderer = ImageRenderer(content: snapshotLayer(store: store, updates: updates, scheme: scheme))
         renderer.scale = 2
         renderer.isOpaque = false
         return renderer.cgImage
     }
 
-    private static func snapshotLayer(store: NodeRuntimeStore, scheme: ColorScheme) -> some View {
+    private static func snapshotLayer(store: NodeRuntimeStore, updates: AppUpdateModel, scheme: ColorScheme) -> some View {
         // 额外画布留白，让圆角与描边不被裁掉。
         ZStack(alignment: .topLeading) {
             Color.clear
                 .frame(width: MenuBarView.panelWidth + 40, height: 560)
-            MenuBarView(store: store, initialPicking: pickingFromEnvironment)
+            MenuBarView(store: store, updates: updates, initialPicking: pickingFromEnvironment)
                 .environment(\.colorScheme, scheme)
                 .fixedSize(horizontal: false, vertical: true)
                 .offset(x: 20, y: 20)

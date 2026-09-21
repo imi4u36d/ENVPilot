@@ -68,11 +68,21 @@ PYTHON_VERSION=3.13.7
 
 每个预设可配置 npm、pnpm、yarn registry，`NODE_OPTIONS`，以及任意合法名称的自定义环境变量。预设切换后应用到新打开的终端。
 
+### 软件更新
+
+- 从 GitHub Releases 查询最新版本（优先 Releases API，被限流或不可达时退回 `releases/latest` 的跳转地址），并按语义化版本比较——`0.6.10` 比 `0.6.9` 新，预发布版小于同号正式版。
+- **一键更新**：下载 `ENVPilot.zip` → `ditto` 解压 → 校验 bundle id、`CFBundleShortVersionString` 与 `codesign --verify --deep --strict` → 退出应用后由一个脱离进程的脚本替换 `.app`、清掉隔离属性、顺手刷新 `~/.local/bin/envpilot-helper`，再重新启动。校验任何一步不过都不会动现有安装。
+- 当前运行位置无法替换时（`swift run` 的非打包进程、DMG 或 App Translocation 的只读路径），退回到下载 dmg 并打开，不做危险操作。
+- 入口有四个：应用菜单 **检查更新…**、菜单栏面板的 **检查更新…**（已发现新版本时直接显示 **更新到 vX.Y.Z…**）、设置窗口的「软件更新」卡片，以及侧边栏底部的新版本角标。
+- 默认每天启动后自动查一次（可关）。更新说明直接取 Release 正文，在卡片里滚动查看。
+
 ## 安装
 
 ### 下载应用
 
 从 [Releases](https://github.com/imi4u36d/ENVPilot/releases) 下载 `ENVPilot.dmg`，打开后把 ENVPilot 拖到「应用程序」目录。
+
+装好之后不必再手动下载：**ENVPilot ▸ 检查更新…**（或设置里的「软件更新」卡片）会查询最新发布并一键更新到新版本。
 
 要求 macOS 14 或更高版本、Apple Silicon（arm64）。
 
@@ -182,11 +192,38 @@ ENVPILOT_MENUBAR_SNAPSHOT=/tmp/expanded.png ENVPILOT_MENUBAR_SNAPSHOT_PICK=node 
 
 未设置该环境变量时，快照工具完全不参与启动流程。
 
+设置窗口的「软件更新」卡片同样可以离屏渲染（用真实的 `NSWindow` + `cacheDisplay`，因为 `ImageRenderer` 画不出滚动区与按钮）：
+
+```bash
+# UPDATE 取 available / downloading / latest / failed，纯状态注入、不联网
+ENVPILOT_WINDOW_SNAPSHOT=/tmp/settings.png ENVPILOT_WINDOW_SNAPSHOT_SETTINGS=1 \
+  ENVPILOT_WINDOW_SNAPSHOT_UPDATE=available dist/ENVPilot.app/Contents/MacOS/ENVPilotApp
+```
+
+### 更新流程探针
+
+检查与更新这条链路自带探针（`Sources/NodePilotApp/UpdateProbe.swift`），平时完全不参与运行：
+
+```bash
+APP=dist/ENVPilot.app/Contents/MacOS/ENVPilotApp
+
+# 只查最新版本，打印安装方式与结果
+ENVPILOT_UPDATE_PROBE=check $APP
+
+# 下载 + 解压 + 校验，打印暂存路径（不动当前安装）
+ENVPILOT_UPDATE_PROBE=stage $APP
+
+# 完整走一遍替换；RELAUNCH=0 时不重启，便于自动验证
+ENVPILOT_UPDATE_PROBE=apply ENVPILOT_UPDATE_RELAUNCH=0 $APP
+```
+
+`ENVPILOT_UPDATE_STAGING_ROOT` 可以改写暂存目录（沙箱或 CI 里指到临时目录）。
+
 ## 持续集成与发布
 
 `.github/workflows/release.yml` 在推送 `v*` tag 时自动在 `macos-26` 运行器上构建并发布：
 
-1. `swift test`（当前 44 个用例）
+1. `swift test`（当前 56 个用例）
 2. `./scripts/package_app.sh release`，用 tag 覆盖 `CFBundleShortVersionString`
 3. 校验 bundle 签名，产出 `ENVPilot.dmg` 与 `ENVPilot.zip`
 4. 创建对应的 GitHub Release 并附上产物

@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.6.5 - 2026-09-21
+
+### 软件更新
+
+- 新增「检查更新」：从 GitHub Releases 查最新版本并支持一键更新。查询优先走 Releases API（未鉴权），被限流或不可达时退回 `releases/latest` 的 302 跳转地址，再按发布流水线固定的资产名拼下载地址；比较版本用语义化版本（`0.6.10` > `0.6.9`，预发布版小于同号正式版），当前版本读不到（开发构建）时一律按「有更新」处理。
+- 一键更新走 `ENVPilot.zip`：`ditto` 解压后校验 bundle id、`CFBundleShortVersionString` 与 `codesign --verify --deep --strict`，全部通过才写一个脱离 app 生命周期的替换脚本——等本进程退出 → `ditto` 覆盖 `.app` → `xattr -dr com.apple.quarantine` → 刷新 `~/.local/bin/envpilot-helper`（存在才刷新）→ `open` 重启。zip 下载、校验、换包全程在后台线程，卡片里显示百分比与速度。
+- 运行位置决定落点：可写的 app 目录原地替换；DMG 与 App Translocation 的只读路径装到 `~/Applications`；非打包进程（`swift run`）只下载 dmg 并打开，不做替换。
+- 入口四处：应用菜单「关于 ENVPilot」下的 **检查更新…**、菜单栏面板底部（已发现新版本时变成 **更新到 vX.Y.Z…**，进度在设置窗口里看）、设置窗口的「软件更新」卡片、以及侧边栏底部状态区的新版本角标。启动后延迟 3 秒自动检查，24 小时内只查一次，可在卡片里关掉。
+- 设置窗口新增「软件更新」卡片：当前版本、状态胶囊、更新说明（Release 正文的轻量 Markdown 降级）、一键更新按钮、下载进度、每天自动检查开关与上次检查时间。命令式入口（菜单/菜单栏）的结果用系统弹窗给出，发现新版本时顺手打开设置窗口。
+- 新增 `Sources/NodePilotCore/AppUpdateService.swift`（版本比较、GitHub 查询、下载、校验、替换脚本）与 `Sources/NodePilotApp/AppUpdateModel.swift`（状态机）。核心逻辑有 12 个单测覆盖：版本解析与比较、GitHub 返回体解码、安装方式判定、真实 zip 的解压与签名校验、替换脚本内容。
+
+### 工具
+
+- `WindowSnapshot` 增加 `ENVPILOT_WINDOW_SNAPSHOT_SETTINGS=1`：用真实的 `NSWindow` + `cacheDisplay` 渲染设置窗口（`ImageRenderer` 画不出滚动区与按钮，按钮会变成禁止符占位）。`ENVPILOT_WINDOW_SNAPSHOT_UPDATE` 可注入 `available|downloading|latest|failed` 四种状态，主窗口快照用它验证侧边栏角标。
+- `MenuBarSnapshot` 增加 `ENVPILOT_MENUBAR_SNAPSHOT_UPDATE=0.6.5`，用于验收菜单栏面板里的「更新到 …」那一行。
+- 新增 `UpdateProbe`（`ENVPILOT_UPDATE_PROBE=check|stage|apply`）：这条链路可以真跑一遍——check 只查版本，stage 下到暂存目录并校验，apply 连替换一起做（`ENVPILOT_UPDATE_RELAUNCH=0` 时不重启）。`ENVPILOT_UPDATE_STAGING_ROOT` 可改写暂存目录。
+
+
 ## v0.6.4 - 2026-09-21
 
 ### 主窗口

@@ -4,13 +4,15 @@ import SwiftUI
 
 struct RootView: View {
     @ObservedObject var store: NodeRuntimeStore
+    @ObservedObject var updates: AppUpdateModel
     @StateObject private var profileEditor: ProfileEditorModel
 
     @State private var section: AppSection?
     @State private var runtimeKind: RuntimeKind = .node
 
-    init(store: NodeRuntimeStore) {
+    init(store: NodeRuntimeStore, updates: AppUpdateModel) {
         self.store = store
+        self.updates = updates
         _profileEditor = StateObject(wrappedValue: ProfileEditorModel(store: store))
         // 离屏快照需要从任意页面启动；正常运行时固定停在概览页。
         _section = State(initialValue: WindowSnapshot.initialSection ?? PerfProbe.settings.section ?? .overview)
@@ -145,6 +147,16 @@ struct RootView: View {
                     .foregroundStyle(.tertiary)
 
                 Spacer(minLength: 4)
+
+                if let badge = updates.badgeText {
+                    Button {
+                        WindowActions.openSettings()
+                    } label: {
+                        Pill("更新 \(badge)", tone: .warning, symbol: "arrow.down.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .help("发现新版本 \(badge)，点击查看并更新")
+                }
 
                 Button {
                     Task { await store.refresh() }

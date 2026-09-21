@@ -13,6 +13,7 @@ import ENVPilotCore
 /// 4. 主窗口 / 设置 / 退出等窗口级操作。
 struct MenuBarView: View {
     @ObservedObject var store: NodeRuntimeStore
+    @ObservedObject var updates: AppUpdateModel
     @Environment(\.openWindow) private var openWindow
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
@@ -31,8 +32,9 @@ struct MenuBarView: View {
     /// 版本选项行高：与 `PickerRow` 保持一致，便于预先算出列表组高度。
     private static let pickerRowHeight: CGFloat = 28
 
-    init(store: NodeRuntimeStore, initialPicking: RuntimeKind? = nil) {
+    init(store: NodeRuntimeStore, updates: AppUpdateModel, initialPicking: RuntimeKind? = nil) {
         self.store = store
+        self.updates = updates
         _picking = State(initialValue: initialPicking)
     }
 
@@ -302,6 +304,18 @@ struct MenuBarView: View {
         VStack(spacing: 0) {
             Divider()
                 .padding(.bottom, 4)
+
+            if let badge = updates.badgeText {
+                // 已经知道有新版本：这一行就是「一键更新」，进度在设置窗口里看。
+                footerRow(title: "更新到 \(badge)…", symbol: "arrow.down.circle") {
+                    WindowActions.openSettings()
+                    Task { await updates.install() }
+                }
+            } else {
+                footerRow(title: "检查更新…", symbol: "arrow.triangle.2.circlepath") {
+                    Task { await UpdatePrompter.checkAndPresent(model: updates) }
+                }
+            }
 
             footerRow(title: "打开 ENVPilot 主窗口", symbol: "macwindow", action: openMainWindow)
             footerRow(title: "设置…", symbol: "gearshape", shortcut: "⌘,") {
