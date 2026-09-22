@@ -132,7 +132,7 @@ enum UpdateProbe {
 
             ## 工具
 
-            - `scripts/probe.sh` 增加折叠探针
+            - 增加折叠动画性能探针
             """,
             pageURL: URL(string: "https://github.com/imi4u36d/ENVPilot/releases/tag/v\(version)"),
             archiveURL: URL(string: "https://github.com/imi4u36d/ENVPilot/releases/download/v\(version)/ENVPilot.zip"),

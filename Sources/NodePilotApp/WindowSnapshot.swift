@@ -1,4 +1,5 @@
 import AppKit
+import ENVPilotCore
 import SwiftUI
 
 /// 主窗口页面的离屏快照。
@@ -26,6 +27,7 @@ enum WindowSnapshot {
     private static let settingsKey = "ENVPILOT_WINDOW_SNAPSHOT_SETTINGS"
     /// 快照里注入的更新状态：`available|downloading|latest|failed`（空/缺省为不注入）。
     private static let updateStateKey = "ENVPILOT_WINDOW_SNAPSHOT_UPDATE"
+    private static let packageManagerExpansionKey = "ENVPILOT_WINDOW_SNAPSHOT_PACKAGE_MANAGER"
 
     /// 快照请求的初始页面，供 `RootView` 在 `init` 中读取。
     static var initialSection: AppSection? {
@@ -34,7 +36,19 @@ enum WindowSnapshot {
         return AppSection(rawValue: raw)
     }
 
-    static func runIfRequested(store: NodeRuntimeStore, updates: AppUpdateModel) {
+    static var initialExpandedPackageManager: PackageManagerKind? {
+        guard ProcessInfo.processInfo.environment[environmentKey] != nil else {
+            return nil
+        }
+        return ProcessInfo.processInfo.environment[packageManagerExpansionKey]
+            .flatMap(PackageManagerKind.init(rawValue:))
+    }
+
+    static func runIfRequested(
+        store: NodeRuntimeStore,
+        aiStore: AIEnvironmentStore,
+        updates: AppUpdateModel
+    ) {
         guard let path = ProcessInfo.processInfo.environment[environmentKey], !path.isEmpty else {
             return
         }
@@ -51,10 +65,10 @@ enum WindowSnapshot {
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            Task {
-                await capture(store: store, to: url)
-                NSApp.terminate(nil)
-            }
+                Task {
+                    await capture(store: store, aiStore: aiStore, to: url)
+                    NSApp.terminate(nil)
+                }
         }
     }
 
@@ -110,8 +124,13 @@ enum WindowSnapshot {
 
     // MARK: Capture
 
-    private static func capture(store: NodeRuntimeStore, to url: URL) async {
+    private static func capture(
+        store: NodeRuntimeStore,
+        aiStore: AIEnvironmentStore,
+        to url: URL
+    ) async {
         await waitForRuntimeData(store)
+        await aiStore.refreshIfNeeded()
         // 让 SwiftUI 完成一次布局与 `.task` 触发（运行时页会在这里拉候选版本）。
         for _ in 0..<12 {
             try? await Task.sleep(nanoseconds: 150_000_000)

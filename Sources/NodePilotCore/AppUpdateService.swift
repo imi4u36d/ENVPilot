@@ -23,6 +23,14 @@ public struct AppVersion: Comparable, Sendable, CustomStringConvertible {
         if let plus = value.firstIndex(of: "+") {
             value = String(value[value.startIndex..<plus])
         }
+        // Homebrew 等工具可能输出 git describe 版本（7.0.6-6-g1d86792）。
+        // 这不是 SemVer 预发布版本，应比较到 tag 版本本身。
+        if let gitDescribeRange = value.range(
+            of: #"-\d+-g[0-9A-Fa-f]+(?:-dirty)?$"#,
+            options: .regularExpression
+        ) {
+            value.removeSubrange(gitDescribeRange)
+        }
         var prerelease: [String] = []
         if let dash = value.firstIndex(of: "-") {
             prerelease = value[value.index(after: dash)...].split(separator: ".").map(String.init)
@@ -274,7 +282,7 @@ public struct AppUpdateService: Sendable {
         public var applicationsDirectory: URL
         /// 无法自更新时 dmg 的落点，默认 `~/Downloads`。
         public var downloadsDirectory: URL
-        /// 由 `install_local.sh` 复制出去的 helper，自更新后一并刷新。
+        /// 本地安装复制出去的 helper，自更新后一并刷新。
         public var installedHelperPath: URL?
 
         public init(

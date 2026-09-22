@@ -69,34 +69,30 @@ struct RuntimesView: View {
     /// 运行时切换、版本搜索、「仅 LTS」都是筛选，放同一行贴着内容列，
     /// 不再往窗口顶部要一条工具栏。
     private var controlBar: some View {
-        HStack(spacing: 12) {
-            Picker("运行时", selection: $kind) {
-                ForEach(RuntimeKind.allCases) { item in
-                    Text(item.title).tag(item)
+        PageToolbar {
+            HStack(spacing: 12) {
+                Picker("运行时", selection: $kind) {
+                    ForEach(RuntimeKind.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
                 }
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .fixedSize()
-
-            Spacer(minLength: 12)
-
-            SearchField(text: $searchText, placeholder: kind.searchPrompt)
-                .frame(width: 250, height: 22)
-                .accessibilityLabel(kind.searchPrompt)
-
-            Toggle(kind.filterTitle, isOn: $recommendedOnly)
-                .toggleStyle(.switch)
-                .controlSize(.small)
+                .labelsHidden()
+                .pickerStyle(.segmented)
                 .fixedSize()
-                .help("只显示长期支持版本")
+
+                Spacer(minLength: 12)
+
+                SearchField(text: $searchText, placeholder: kind.searchPrompt)
+                    .frame(width: 250, height: 24)
+                    .accessibilityLabel(kind.searchPrompt)
+
+                Toggle(kind.filterTitle, isOn: $recommendedOnly)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .fixedSize()
+                    .help("只显示长期支持版本")
+            }
         }
-        .padding(.horizontal, Metric.pagePadding)
-        .padding(.vertical, 11)
-        .frame(maxWidth: Metric.pageMaxWidth, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .center)
-        .background(DesignColor.canvas)
-        .overlay(alignment: .bottom) { Divider() }
     }
 
     // MARK: 已安装
@@ -158,8 +154,7 @@ struct RuntimesView: View {
                 Button("设为默认") {
                     Task { await store.selectDefault(option) }
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .appButton(.secondary, size: .small)
                 .disabled(store.isBusy)
             }
 
@@ -199,8 +194,7 @@ struct RuntimesView: View {
                 } label: {
                     Label("重新获取", systemImage: "arrow.clockwise")
                 }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
+                .appButton(.quiet, size: .small)
                 .disabled(store.isBusy)
                 .help("重新获取 \(kind.title) 官方版本列表")
             )
@@ -320,8 +314,7 @@ struct RuntimesView: View {
                 } label: {
                     Label("安装", systemImage: "square.and.arrow.down")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .appButton(.primary, size: .small)
                 .disabled(store.isBusy)
             }
         }

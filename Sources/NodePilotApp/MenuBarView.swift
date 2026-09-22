@@ -19,7 +19,7 @@ struct MenuBarView: View {
     @Environment(\.dismiss) private var dismiss
 
     /// 固定面板宽度；离屏快照可复用同一套排版。
-    static let panelWidth: CGFloat = 336
+    static let panelWidth: CGFloat = 348
     /// 面板高度预算；正文按设计封顶在此以内（实测摘要态约 300，展开态约 560）。
     static let panelMaxHeight: CGFloat = 620
 
@@ -67,7 +67,13 @@ struct MenuBarView: View {
     // MARK: 顶部
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .center, spacing: 9) {
+            Image(systemName: "terminal.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 24, height: 24)
+                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+
             Text("ENVPilot")
                 .font(.headline)
                 .foregroundStyle(.primary)
@@ -426,11 +432,11 @@ private struct PickerRow: View {
 
 /// 面板外观令牌。非 private：离屏快照（`MenuBarSnapshot`）需要复用同一套外观。
 enum PanelChrome {
-    static let cornerRadius: CGFloat = 10
+    static let cornerRadius: CGFloat = 12
 
     /// 行悬停高亮。
     static var rowHighlight: Color {
-        Color.primary.opacity(0.09)
+        DesignColor.hover
     }
 }
 
@@ -444,7 +450,7 @@ private struct PanelBackground: View {
     let scheme: ColorScheme
 
     var body: some View {
-        scheme == .dark ? Color(white: 0) : Color(white: 1)
+        scheme == .dark ? Color(white: 0.075) : Color(white: 0.985)
     }
 }
 
@@ -454,7 +460,7 @@ private struct PanelSection: ViewModifier {
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
         return content
-            .background(scheme == .dark ? Color(white: 0.055) : Color(white: 1), in: shape)
+            .background(scheme == .dark ? Color(white: 0.11) : Color(white: 1), in: shape)
             .overlay {
                 shape.strokeBorder(panelHairline(scheme), lineWidth: 1)
             }
@@ -463,13 +469,13 @@ private struct PanelSection: ViewModifier {
 
 /// 面板描边：深色下需要比窗口分隔线更亮，否则卡片边界消失。
 private func panelHairline(_ scheme: ColorScheme) -> Color {
-    scheme == .dark ? Color(white: 1, opacity: 0.14) : Color(white: 0, opacity: 0.12)
+    DesignColor.hairline
 }
 
 /// 面板里的中性凹槽 / 徽章底色。与主窗口的 `DesignColor.well` 同值，
 /// 但同样按 `scheme` 显式取色，理由同 `PanelBackground`。
 private func panelWell(_ scheme: ColorScheme) -> Color {
-    scheme == .dark ? Color(white: 1, opacity: 0.06) : Color(white: 0, opacity: 0.045)
+    DesignColor.well
 }
 
 /// 面板内的裸行按钮：悬停高亮 + 按下反馈。
@@ -500,7 +506,7 @@ private extension View {
     func versionListGroupChrome(_ scheme: ColorScheme) -> some View {
         frame(maxWidth: .infinity)
             .padding(.vertical, 4)
-            .background(scheme == .dark ? Color(white: 1, opacity: 0.05) : Color(white: 0, opacity: 0.045))
+            .background(DesignColor.well)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }

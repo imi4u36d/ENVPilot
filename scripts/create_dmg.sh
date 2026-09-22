@@ -2,10 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD_CONFIG="${1:-release}"
 MODULE_CACHE_ROOT="${TMPDIR:-/tmp}/envpilot-swiftpm-cache"
 
 APP_NAME="ENVPilot"
+BUILD_CONFIG="release"
 APP_BUNDLE="$ROOT_DIR/dist/${APP_NAME}.app"
 DMG_STAGE_DIR="$ROOT_DIR/dist/${APP_NAME}-dmg"
 DMG_PATH="$ROOT_DIR/dist/${APP_NAME}.dmg"
@@ -13,8 +13,9 @@ BIN_DIR="$ROOT_DIR/.build/${BUILD_CONFIG}"
 APP_BIN="$BIN_DIR/ENVPilotApp"
 HELPER_BIN="$BIN_DIR/envpilot-helper"
 APP_ICON="$ROOT_DIR/Resources/AppIcon.icns"
+APP_RESOURCE_BUNDLE="$BIN_DIR/ENVPilot_ENVPilotApp.bundle"
 
-echo "Building ENVPilot ($BUILD_CONFIG)..."
+echo "Building ENVPilot..."
 cd "$ROOT_DIR"
 mkdir -p "$MODULE_CACHE_ROOT"
 export SWIFTPM_MODULECACHE_OVERRIDE="$MODULE_CACHE_ROOT/swiftpm"
@@ -22,39 +23,25 @@ export CLANG_MODULE_CACHE_PATH="$MODULE_CACHE_ROOT/clang"
 swift build -c "$BUILD_CONFIG" --product ENVPilotApp
 swift build -c "$BUILD_CONFIG" --product envpilot-helper
 
-if [[ ! -x "$APP_BIN" ]]; then
-  echo "Missing app binary: $APP_BIN" >&2
-  exit 1
-fi
-
-if [[ ! -x "$HELPER_BIN" ]]; then
-  echo "Missing helper binary: $HELPER_BIN" >&2
-  exit 1
-fi
-
-if [[ ! -f "$APP_ICON" ]]; then
-  echo "Missing app icon: $APP_ICON" >&2
-  exit 1
-fi
+for file in "$APP_BIN" "$HELPER_BIN" "$APP_ICON" "$APP_RESOURCE_BUNDLE"; do
+  if [[ ! -e "$file" ]]; then
+    echo "Missing build input: $file" >&2
+    exit 1
+  fi
+done
 
 rm -rf "$APP_BUNDLE"
-mkdir -p "$APP_BUNDLE/Contents/MacOS"
-mkdir -p "$APP_BUNDLE/Contents/Resources/bin"
+mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources/bin"
 
 cp "$APP_BIN" "$APP_BUNDLE/Contents/MacOS/ENVPilotApp"
 cp "$HELPER_BIN" "$APP_BUNDLE/Contents/Resources/bin/envpilot-helper"
 cp "$APP_ICON" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
-
-# 系统级菜单的中文靠这个 lproj 目录：macOS 只有在 bundle 里能找到
-# Contents/Resources/zh-Hans.lproj 时，才会把「关于/编辑/显示/窗口/帮助」这些
-# 系统菜单换成中文。少了它，即使系统语言是中文，菜单也全是英文。
+cp -R "$APP_RESOURCE_BUNDLE" "$APP_BUNDLE/Contents/Resources/ENVPilot_ENVPilotApp.bundle"
 cp -R "$ROOT_DIR/Resources/zh-Hans.lproj" "$APP_BUNDLE/Contents/Resources/zh-Hans.lproj"
 
 chmod +x "$APP_BUNDLE/Contents/MacOS/ENVPilotApp"
 chmod +x "$APP_BUNDLE/Contents/Resources/bin/envpilot-helper"
 
-# 版本号可通过环境变量注入（发布流水线用 tag 覆盖）；
-# 未设置时保持仓库内的默认值，便于本地构建。
 APP_VERSION="${APP_VERSION:-0.6.7}"
 APP_BUILD="${APP_BUILD:-9}"
 
@@ -94,10 +81,6 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# 签名身份：默认取本机钥匙串里第一个有效的 codesigning 身份（Apple Development），
-# 可用 SIGN_IDENTITY 环境变量覆盖；设为 "adhoc" 回退到自签名。
-# 注意：Apple Development 证书用于开发机自装/团队内部，
-# 对外分发到别人的 Mac 需要 Developer ID Application + 公证。
 SIGN_IDENTITY="${SIGN_IDENTITY:-$(security find-identity -v -p codesigning \
   | sed -n 's/^ *[0-9]*) [A-F0-9]* "\([^"]*\)".*$/\1/p' | head -1)}"
 if [[ "$SIGN_IDENTITY" == "adhoc" || -z "$SIGN_IDENTITY" ]]; then
@@ -107,14 +90,18 @@ else
   SIGNER="$SIGN_IDENTITY"
   TIMESTAMP_FLAG=(--timestamp)
 fi
+
 echo "Signing with: ${SIGNER}"
 codesign --force --sign "$SIGNER" ${TIMESTAMP_FLAG[@]} "$APP_BUNDLE/Contents/Resources/bin/envpilot-helper"
 codesign --force --sign "$SIGNER" ${TIMESTAMP_FLAG[@]} "$APP_BUNDLE"
+codesign --verify --deep --strict "$APP_BUNDLE"
 
 rm -rf "$DMG_STAGE_DIR"
 mkdir -p "$DMG_STAGE_DIR"
 cp -R "$APP_BUNDLE" "$DMG_STAGE_DIR/${APP_NAME}.app"
-rm -f "$DMG_PATH"
+ln -s /Applications "$DMG_STAGE_DIR/Applications"
+
+rm -f "$DMG_PATH" "$DMG_PATH.sha256"
 hdiutil create \
   -volname "$APP_NAME" \
   -srcfolder "$DMG_STAGE_DIR" \
@@ -123,8 +110,6 @@ hdiutil create \
   "$DMG_PATH" >/dev/null
 shasum -a 256 "$DMG_PATH" > "$DMG_PATH.sha256"
 
-echo "Packaged app:"
-echo "  $APP_BUNDLE"
-echo "Packaged dmg:"
+echo "Created:"
 echo "  $DMG_PATH"
 echo "  $DMG_PATH.sha256"

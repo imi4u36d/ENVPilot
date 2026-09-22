@@ -6,6 +6,7 @@ import Foundation
 enum AppPreferenceKey {
     static let showsMenuBarMenu = "showsMenuBarMenu"
     static let keepsMenuBarIconAfterClose = "keepsMenuBarIconAfterClose"
+    static let hasCompletedEnvironmentCheck = "hasCompletedEnvironmentCheck"
 }
 
 /// 「关闭主窗口后是否留在菜单栏」这一个开关的读取处。

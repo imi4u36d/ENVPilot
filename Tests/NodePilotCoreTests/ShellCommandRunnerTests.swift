@@ -29,4 +29,56 @@ final class ShellCommandRunnerTests: XCTestCase {
         XCTAssertEqual(result.standardOutput.utf8.count, 256 * 1_024)
         XCTAssertEqual(result.standardError.utf8.count, 256 * 1_024)
     }
+
+    func testCancellationTerminatesRunningCommand() async throws {
+        let cancellation = ShellCommandCancellation()
+        let start = ContinuousClock.now
+        let task = Task.detached {
+            try ShellCommandRunner().runShell(
+                "exec sleep 5",
+                environment: [:],
+                cancellation: cancellation,
+                onOutput: nil
+            )
+        }
+
+        try await Task.sleep(for: .milliseconds(100))
+        cancellation.cancel()
+        let result = try await task.value
+
+        XCTAssertTrue(cancellation.isCancelled)
+        XCTAssertFalse(result.succeeded)
+        XCTAssertLessThan(start.duration(to: .now), .seconds(2))
+    }
+
+    func testStreamingOutputIsDeliveredBeforeCommandCompletes() throws {
+        let output = LockedOutput()
+        let result = try ShellCommandRunner().runShell(
+            "printf 'downloading\\n'; sleep 0.1; printf 'installing\\n'",
+            environment: [:],
+            cancellation: nil,
+            onOutput: { output.append($0) }
+        )
+
+        XCTAssertTrue(result.succeeded)
+        XCTAssertTrue(output.value.contains("downloading"))
+        XCTAssertTrue(output.value.contains("installing"))
+    }
+}
+
+private final class LockedOutput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var output = ""
+
+    func append(_ chunk: String) {
+        lock.lock()
+        output += chunk
+        lock.unlock()
+    }
+
+    var value: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return output
+    }
 }

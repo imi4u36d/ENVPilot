@@ -1,16 +1,33 @@
+import AppKit
+import ENVPilotCore
 import SwiftUI
 
 // MARK: - Root shell
 
 struct RootView: View {
     @ObservedObject var store: NodeRuntimeStore
+    @ObservedObject var aiStore: AIEnvironmentStore
+    @ObservedObject var packageManagerStore: PackageManagerStore
     @ObservedObject var updates: AppUpdateModel
+    @ObservedObject var environmentCheck: EnvironmentCheckStore
+    @AppStorage(AppPreferenceKey.hasCompletedEnvironmentCheck) private var hasCompletedEnvironmentCheck = false
     @State private var section: AppSection?
     @State private var runtimeKind: RuntimeKind = .node
+    @State private var aiFocusKind: AIEnvironmentKind?
+    @State private var didOfferFirstLaunchCheck = false
 
-    init(store: NodeRuntimeStore, updates: AppUpdateModel) {
+    init(
+        store: NodeRuntimeStore,
+        aiStore: AIEnvironmentStore,
+        packageManagerStore: PackageManagerStore,
+        updates: AppUpdateModel,
+        environmentCheck: EnvironmentCheckStore
+    ) {
         self.store = store
+        self.aiStore = aiStore
+        self.packageManagerStore = packageManagerStore
         self.updates = updates
+        self.environmentCheck = environmentCheck
         // 离屏快照需要从任意页面启动；正常运行时固定停在概览页。
         _section = State(initialValue: WindowSnapshot.initialSection ?? PerfProbe.settings.section ?? .overview)
     }
@@ -28,6 +45,23 @@ struct RootView: View {
         // （AppKit 的 `allowsFullHeightLayout` 会自己给两栏留出标题栏的安全区。）
         .ignoresSafeArea(.container, edges: .top)
         .flatTitleBar()
+        .sheet(isPresented: $environmentCheck.isPresented, onDismiss: {
+            hasCompletedEnvironmentCheck = true
+        }) {
+            EnvironmentCheckView(store: environmentCheck) {
+                hasCompletedEnvironmentCheck = true
+                environmentCheck.dismiss()
+            }
+        }
+        .onAppear {
+            guard !didOfferFirstLaunchCheck, !hasCompletedEnvironmentCheck else {
+                return
+            }
+            didOfferFirstLaunchCheck = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                environmentCheck.present()
+            }
+        }
     }
 
     @ViewBuilder
@@ -56,7 +90,7 @@ struct RootView: View {
     // MARK: Sidebar
 
     /// 侧边栏分两区，都用留白隔开而不是分隔线：
-    /// 上面的品牌区只表身份，下面的导航区只剩两项。
+    /// 上面的品牌区只表身份，下面的导航区承载页面入口。
     /// 原来它们挤在同一个 `List` 里，三行等高的行贴在一起，
     /// 整块内容看起来「堆」在顶部。拆成两区之后，身份和导航各占一层，
     /// 行与行、区与区之间都有明确的呼吸感。
@@ -67,8 +101,7 @@ struct RootView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // 整页统一成同一张白/黑台面，两栏只靠中间那条分隔线分开。
-        .background(DesignColor.canvas)
+        .background(DesignColor.sidebar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             sidebarFooter
         }
@@ -78,6 +111,35 @@ struct RootView: View {
     /// 标题栏是隐藏的（内容铺到窗口最顶端），顶部留白要越过红绿灯。
     private var brandHeader: some View {
         HStack(spacing: 10) {
+            brandIcon
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("ENVPilot")
+                    .font(.system(size: 14, weight: .semibold))
+                Text("开发环境管理")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 32)
+        .padding(.bottom, 18)
+    }
+
+    @ViewBuilder
+    private var brandIcon: some View {
+        if let appIcon = Bundle.module.image(forResource: "AppIcon")
+            ?? NSApplication.shared.applicationIconImage
+        {
+            Image(nsImage: appIcon)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: 30, height: 30)
+                .accessibilityHidden(true)
+        } else {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(
                     LinearGradient(
@@ -95,23 +157,11 @@ struct RootView: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.white)
                 }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("ENVPilot")
-                    .font(.system(size: 14, weight: .semibold))
-                Text("开发环境管理")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer(minLength: 0)
+                .accessibilityHidden(true)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 32)
-        .padding(.bottom, 18)
     }
 
-    /// 导航区：两项平铺，不再分组。
+    /// 导航区：页面入口平铺，不再分组。
     ///
     /// 用 `SelectableRowStyle`（强调色浅底 + 圆角）替代 `List` 的全宽选中条：
     /// 行高可以自己做主，行与行之间留出 6pt，读起来是两个独立入口而不是一条
@@ -120,13 +170,17 @@ struct RootView: View {
         VStack(spacing: 6) {
             ForEach(AppSection.allCases) { item in
                 Button {
+                    aiFocusKind = nil
                     section = item
                 } label: {
-                    Label(item.title, systemImage: item.symbol)
-                        .font(.system(size: 13, weight: .medium))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                Label(item.title, systemImage: item.symbol)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(
+                        (section ?? .overview) == item ? Color.accentColor : Color.primary
+                    )
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(SelectableRowStyle(isSelected: (section ?? .overview) == item))
                 .accessibilityAddTraits((section ?? .overview) == item ? [.isSelected] : [])
@@ -156,17 +210,26 @@ struct RootView: View {
             Spacer(minLength: 4)
 
             Button {
+                environmentCheck.present()
+            } label: {
+                Image(systemName: "checkmark.shield")
+            }
+            .appIconButton()
+            .help("检查并修复本地环境")
+            .accessibilityLabel("检查并修复本地环境")
+
+            Button {
                 WindowActions.openSettings()
             } label: {
                 Image(systemName: "gearshape")
             }
-            .buttonStyle(.borderless)
+            .appIconButton()
             .help("打开设置")
             .accessibilityLabel("打开设置")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(DesignColor.canvas)
+        .background(DesignColor.sidebar)
     }
 
     // MARK: Detail
@@ -174,6 +237,8 @@ struct RootView: View {
     /// 页面身份由侧边栏的选中项表达，所以这里不再放标题和副标题。
     private var detailColumn: some View {
         VStack(spacing: 0) {
+            let activeSection = section ?? .overview
+            PageHeader(title: activeSection.title, subtitle: activeSection.subtitle)
             detailContent
             if let status = store.statusMessage {
                 StatusBar(
@@ -184,20 +249,35 @@ struct RootView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(DesignColor.canvas)
     }
 
     @ViewBuilder
     private var detailContent: some View {
         switch section ?? .overview {
         case .overview:
-            OverviewView(store: store) { kind in
-                runtimeKind = kind
-                section = .runtimes
-            }
+            OverviewView(
+                store: store,
+                aiStore: aiStore,
+                onOpenRuntime: { kind in
+                    runtimeKind = kind
+                    section = .runtimes
+                },
+                onOpenAI: { kind in
+                    aiFocusKind = kind
+                    section = .ai
+                }
+            )
             .id(AppSection.overview)
         case .runtimes:
             RuntimesView(store: store, kind: $runtimeKind)
                 .id(AppSection.runtimes)
+        case .packageManagers:
+            PackageManagersView(store: packageManagerStore)
+                .id(AppSection.packageManagers)
+        case .ai:
+            AIEnvironmentsView(store: aiStore, focusKind: aiFocusKind)
+                .id(AppSection.ai)
         }
     }
 }

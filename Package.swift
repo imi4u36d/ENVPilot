@@ -29,7 +29,10 @@ let package = Package(
         .executableTarget(
             name: "ENVPilotApp",
             dependencies: ["ENVPilotCore"],
-            path: "Sources/NodePilotApp"
+            path: "Sources/NodePilotApp",
+            resources: [
+                .copy("../../Resources/AppIcon.icns"),
+            ]
         ),
         .executableTarget(
             name: "envpilot-helper",

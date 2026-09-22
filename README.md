@@ -6,7 +6,7 @@
 
 # ENVPilot
 
-ENVPilot 是一款原生 macOS 开发环境管理工具。它统一管理 Node.js、JDK 和 Python 运行时，并按你在应用里选定的版本为终端生成对应的环境。
+ENVPilot 是一款原生 macOS 开发环境管理工具。它统一管理 Node.js、JDK、Python 运行时，以及 Codex、Claude Code、Pi、OpenCode 等 AI 编码工具，并按你在应用里选定的版本为终端生成对应的环境。
 
 - 运行时由 ENVPilot 自主管理，不依赖 Homebrew、SDKMAN、nvm、fnm 或 pyenv
 - 同时提供图形界面、`envpilot-helper` CLI 和简写命令 `ep`
@@ -29,12 +29,16 @@ ENVPilot 是一款原生 macOS 开发环境管理工具。它统一管理 Node.j
 
 ### 主窗口
 
-主窗口分为两个页面，左侧栏切换：
+主窗口分为四个页面，左侧栏切换：
 
 | 页面 | 作用 |
 | --- | --- |
-| 概览 | 当前生效的 Node / JDK / Python、一键切换版本、终端将执行的导出语句 |
+| 概览 | 当前生效的 Node / JDK / Python 与 AI 编码工具；有更新时可直接跳转到对应页面 |
 | 运行时 | 一个页面内切换 Node / JDK / Python；已安装版本与可安装版本分区展示，支持搜索、仅 LTS 过滤与安装进度 |
+| 包管理器 | 集中查看 npm、pnpm、Homebrew、uv 的安装位置、当前版本与最新版本，支持安装和更新 |
+| AI 环境 | 集中查看 Codex、Claude Code、Pi、OpenCode 的安装位置、当前版本与最新版本，并按安装来源执行更新 |
+
+首次启动会打开环境检查，逐项确认 ENVPilot Node、命令行工具、zsh 自动激活与 AI CLI 可见性；必需项缺失时可以直接一键配置或修复。之后可从侧边栏底部的盾牌按钮再次检查。
 
 侧边栏底部只留设置按钮。重新读取本机运行时放在「显示」菜单里，快捷键仍是 ⌘R。
 
@@ -63,6 +67,20 @@ ENVPilot 是一款原生 macOS 开发环境管理工具。它统一管理 Node.j
 - 入口有四个：应用菜单 **检查更新…**、菜单栏面板的 **检查更新…**（已发现新版本时直接显示 **更新到 vX.Y.Z…**）、设置窗口的「软件更新」卡片，以及侧边栏底部的新版本角标。
 - 默认每天启动后自动查一次（可关）。更新说明直接取 Release 正文，在卡片里滚动查看。
 
+### AI 工具版本管理
+
+- 自动探测 `codex`、`claude`、`pi`、`opencode`，显示可执行文件路径、安装来源、当前版本与最新版本。
+- 识别 Homebrew Cask、Homebrew Formula、ENVPilot Node、npm 与 pnpm 安装，更新时分别走 `brew upgrade` 或工具自身的更新命令。
+- 已由其他来源安装的工具可一键切换到 ENVPilot 管理：安装最新版到当前 ENVPilot Node，新终端优先使用该版本。
+- 支持单个更新与「全部更新」；检查失败时保留本机版本信息，不影响其他工具。
+
+### 包管理器管理
+
+- 自动探测 `npm`、`pnpm`、`brew`、`uv`，显示来源、路径、当前版本和最新版本。
+- 未安装时使用官方安装脚本；已安装时优先使用自身的更新命令，Homebrew 管理的工具走 `brew upgrade`。
+- 独立安装的 pnpm 和 uv 可一键切换到 ENVPilot 管理：pnpm 安装到当前 ENVPilot Node，uv 安装到 `~/.envpilot/tools`，新终端优先使用 ENVPilot 版本。
+- 支持单个安装、单项更新与「全部更新」，并复用 AI 环境页的进度和取消交互。
+
 ## 安装
 
 ### 下载应用
@@ -76,28 +94,20 @@ ENVPilot 是一款原生 macOS 开发环境管理工具。它统一管理 Node.j
 > 发布构建为 ad-hoc 签名、未经 Apple 公证。首次打开若提示「已损坏」或「无法验证开发者」，请执行
 > `xattr -dr com.apple.quarantine /Applications/ENVPilot.app`，或在「系统设置 ▸ 隐私与安全性」中允许打开。
 
-### 从源码安装
+### 从源码创建 DMG
 
 需要 macOS 14+ 与支持 Swift 6.2 的工具链：
 
 ```bash
 git clone https://github.com/imi4u36d/ENVPilot.git
 cd ENVPilot
-./scripts/install_local.sh
+./scripts/create_dmg.sh
 ```
 
-脚本会安装：
-
-- `~/Applications/ENVPilot.app`
-- `~/.local/bin/envpilot-helper`
-- `~/.local/bin/ep`
-- `~/.zshrc` 中带有 ENVPilot 标记的自动激活片段
-
-安装完成后重新打开终端，或执行：
+脚本会完成 release 构建、组装 `.app`、签名并生成 DMG：
 
 ```bash
-source ~/.zshrc
-open ~/Applications/ENVPilot.app
+open dist/ENVPilot.dmg
 ```
 
 ## 常用命令
@@ -130,77 +140,22 @@ swift build
 # 运行测试
 swift test
 
-# 构建、打包并验证本地应用进程
-./script/build_and_run.sh --verify
-
-# 生成发布版 app 与 dmg
-./scripts/package_app.sh release
+# 一键创建 DMG
+./scripts/create_dmg.sh
 ```
 
-打包产物位于 `dist/ENVPilot.app` 与 `dist/ENVPilot.dmg`。版本号可通过环境变量注入，发布流水线即以此覆盖 tag 版本：
+产物位于 `dist/ENVPilot.dmg` 与 `dist/ENVPilot.dmg.sha256`。版本号可通过环境变量注入，发布流水线即以此覆盖 tag 版本：
 
 ```bash
-APP_VERSION=0.6.1 APP_BUILD=4 ./scripts/package_app.sh release
+APP_VERSION=0.6.1 APP_BUILD=4 ./scripts/create_dmg.sh
 ```
-
-### 图标
-
-应用图标由脚本几何绘制生成（`scripts/generate_app_icon.py`，需要 Pillow），不是手绘素材；改配色或几何参数后重新生成即可：
-
-```bash
-python3 scripts/generate_app_icon.py
-```
-
-脚本会输出 1024 主稿、10 档 iconset 尺寸，并调用 `iconutil` 生成 `Resources/AppIcon.icns`。
-
-### 界面快照
-
-菜单栏弹层不在窗口系统里：`screencapture` 抓不到它，自动化脚本也无法点开。项目内置离屏快照工具，用 `ImageRenderer` 渲染真实的 `MenuBarView`（读取真实运行时状态），便于设计评审与回归比对：
-
-```bash
-# 同时输出浅色与深色
-ENVPILOT_MENUBAR_SNAPSHOT=/tmp/menubar.png dist/ENVPilot.app/Contents/MacOS/ENVPilotApp
-
-# 指定展开某一类运行时的版本列表
-ENVPILOT_MENUBAR_SNAPSHOT=/tmp/expanded.png ENVPILOT_MENUBAR_SNAPSHOT_PICK=node \
-  dist/ENVPilot.app/Contents/MacOS/ENVPilotApp
-```
-
-未设置该环境变量时，快照工具完全不参与启动流程。
-
-设置窗口的「软件更新」卡片同样可以离屏渲染（用真实的 `NSWindow` + `cacheDisplay`，因为 `ImageRenderer` 画不出滚动区与按钮）：
-
-```bash
-# UPDATE 取 available / downloading / latest / failed，纯状态注入、不联网
-ENVPILOT_WINDOW_SNAPSHOT=/tmp/settings.png ENVPILOT_WINDOW_SNAPSHOT_SETTINGS=1 \
-  ENVPILOT_WINDOW_SNAPSHOT_UPDATE=available dist/ENVPilot.app/Contents/MacOS/ENVPilotApp
-```
-
-### 更新流程探针
-
-检查与更新这条链路自带探针（`Sources/NodePilotApp/UpdateProbe.swift`），平时完全不参与运行：
-
-```bash
-APP=dist/ENVPilot.app/Contents/MacOS/ENVPilotApp
-
-# 只查最新版本，打印安装方式与结果
-ENVPILOT_UPDATE_PROBE=check $APP
-
-# 下载 + 解压 + 校验，打印暂存路径（不动当前安装）
-ENVPILOT_UPDATE_PROBE=stage $APP
-
-# 完整走一遍替换；RELAUNCH=0 时不重启，便于自动验证
-ENVPILOT_UPDATE_PROBE=apply ENVPILOT_UPDATE_RELAUNCH=0 $APP
-```
-
-`ENVPILOT_UPDATE_STAGING_ROOT` 可以改写暂存目录（沙箱或 CI 里指到临时目录）。
 
 ## 持续集成与发布
 
 `.github/workflows/release.yml` 在推送 `v*` tag 时自动在 `macos-26` 运行器上构建并发布：
 
-1. `swift test`（当前 46 个用例）
-2. `./scripts/package_app.sh release`，用 tag 覆盖 `CFBundleShortVersionString`
+1. `swift test`（当前 61 个用例）
+2. `./scripts/create_dmg.sh`，用 tag 覆盖 `CFBundleShortVersionString`
 3. 校验 bundle 签名，产出 `ENVPilot.dmg` 与 `ENVPilot.zip`
 4. 创建对应的 GitHub Release 并附上产物
 
@@ -218,16 +173,6 @@ git push origin v0.6.1
 - `ENVPilotApp`：SwiftUI macOS 应用（`Sources/NodePilotApp`）
 - `ENVPilotCore`：运行时检测、安装、配置与 shell 集成（`Sources/NodePilotCore`）
 - `envpilot-helper`：终端 CLI，安装后同时提供 `ep` 符号链接（`Sources/nodepilot-helper`）
-
-## zsh 集成
-
-如需单独安装或更新 shell 片段：
-
-```bash
-./scripts/install_zsh_integration.sh release ~/.local/bin/envpilot-helper
-```
-
-生成的片段由 `# >>> ENVPilot >>>` 和 `# <<< ENVPilot <<<` 包围，可重复执行安装脚本安全更新。
 
 ## 许可证
 

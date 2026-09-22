@@ -7,6 +7,8 @@ import SwiftUI
 enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case overview
     case runtimes
+    case packageManagers
+    case ai
 
     var id: String { rawValue }
 
@@ -16,6 +18,23 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
             return "概览"
         case .runtimes:
             return "运行时"
+        case .packageManagers:
+            return "包管理器"
+        case .ai:
+            return "AI 环境"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .overview:
+            return "查看当前生效版本、终端环境和 AI 工具状态"
+        case .runtimes:
+            return "安装、切换和管理 Node.js、JDK 与 Python"
+        case .packageManagers:
+            return "管理 npm、pnpm、Homebrew 和 uv"
+        case .ai:
+            return "管理终端中使用的 AI 编码工具"
         }
     }
 
@@ -25,6 +44,10 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
             return "gauge.with.dots.needle.67percent"
         case .runtimes:
             return "square.stack.3d.up"
+        case .packageManagers:
+            return "shippingbox"
+        case .ai:
+            return "sparkles"
         }
     }
 }
@@ -204,21 +227,22 @@ enum WindowActions {
 /// 全局尺寸令牌。整页只用这几个数值，避免每处各写一个魔数。
 enum Metric {
     /// 正文最大宽度。超宽窗口下居中，而不是让右侧留一大片空白。
-    static let pageMaxWidth: CGFloat = 1000
-    static let pagePadding: CGFloat = 24
+    static let pageMaxWidth: CGFloat = 1040
+    static let pagePadding: CGFloat = 28
     /// 分组的间距：比组内行距明显大一档，层次靠留白而不是靠边框。
-    static let sectionSpacing: CGFloat = 22
+    static let sectionSpacing: CGFloat = 24
 
-    static let groupRadius: CGFloat = 10
-    static let controlRadius: CGFloat = 7
-    static let groupPadding: CGFloat = 14
+    static let groupRadius: CGFloat = 12
+    static let controlRadius: CGFloat = 8
+    static let groupPadding: CGFloat = 16
 
-    static let rowPadding: CGFloat = 14
-    static let rowVerticalPadding: CGFloat = 11
+    static let rowPadding: CGFloat = 16
+    static let rowVerticalPadding: CGFloat = 13
     /// 分隔线缩进：与行首图标的中心对齐，读起来像一条连续的分组。
-    static let rowDividerInset: CGFloat = 14
+    static let rowDividerInset: CGFloat = 16
 
-    static let badgeSize: CGFloat = 30
+    static let badgeSize: CGFloat = 32
+    static let controlHeight: CGFloat = 30
 }
 
 // MARK: - Color tokens
@@ -233,12 +257,17 @@ enum Metric {
 /// 颜色一律用 `NSColor` 的 dynamic provider 在绘制时按当前 appearance 取值，
 /// 因此 `background`、`strokeBorder` 以及离屏快照（`cacheDisplay`）都能拿到正确的深浅色。
 enum DesignColor {
-    /// 页面画布。
-    static let canvas = adaptive(.white, .black)
+    /// 页面画布。用轻微色差把内容区和侧边栏分开，但不恢复成系统灰雾。
+    static let canvas = adaptive(gray(0.985), gray(0.075))
 
-    /// 分组表面。浅色与画布同为纯白，只靠描边划界；深色抬到 5.5% 白，
-    /// 保证卡片仍能从纯黑画布里浮出来。
-    static let group = adaptive(.white, gray(0.055))
+    /// 侧边栏表面。比内容区略深，选中态才有稳定的承托。
+    static let sidebar = adaptive(gray(0.955), gray(0.045))
+
+    /// 固定工具栏表面。
+    static let toolbar = adaptive(gray(0.975), gray(0.065))
+
+    /// 分组表面。浅色保持白色，深色抬高一档灰度，保证边界稳定。
+    static let group = adaptive(.white, gray(0.11))
 
     /// 兼容旧调用点。
     static var surface: Color {
@@ -246,10 +275,21 @@ enum DesignColor {
     }
 
     /// 分组内的凹槽：导出脚本、路径条。比卡片深一档，但仍不与画布争层次。
-    static let well = adaptive(gray(0, alpha: 0.04), gray(1, alpha: 0.06))
+    static let well = adaptive(gray(0, alpha: 0.042), gray(1, alpha: 0.065))
+
+    /// 按钮、分段控件等弱填充表面。
+    static let control = adaptive(gray(0, alpha: 0.055), gray(1, alpha: 0.095))
+
+    /// 指针悬停表面。
+    static let hover = adaptive(gray(0, alpha: 0.06), gray(1, alpha: 0.10))
 
     /// 描边。底色相同，卡片边界全靠这一条线，因此比系统分隔线略实。
-    static let hairline = adaptive(gray(0, alpha: 0.11), gray(1, alpha: 0.14))
+    static let hairline = adaptive(gray(0, alpha: 0.10), gray(1, alpha: 0.16))
+
+    /// 强调色浅底。用于选中行与焦点状态。
+    static var selection: Color {
+        Color.accentColor.opacity(0.15)
+    }
 
     static var hairlineShape: some View {
         RoundedRectangle(cornerRadius: Metric.groupRadius, style: .continuous)
@@ -330,11 +370,283 @@ struct PageContainer<Content: View>: View {
                 content
             }
             .padding(.horizontal, Metric.pagePadding)
-            .padding(.vertical, 20)
+            .padding(.vertical, 16)
             .frame(maxWidth: maxWidth, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .background(DesignColor.canvas)
+    }
+}
+
+/// 页面标题：在内容顶部建立稳定的页面身份，避免只能靠侧边栏判断当前位置。
+struct PageHeader: View {
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.primary)
+
+            Text(subtitle)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: Metric.pageMaxWidth, alignment: .leading)
+        .padding(.horizontal, Metric.pagePadding)
+        .padding(.top, 22)
+        .padding(.bottom, 14)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .background(DesignColor.canvas)
+    }
+}
+
+/// 固定筛选/操作栏：统一高度、背景与底部分隔线。
+struct PageToolbar<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        content
+            .padding(.horizontal, Metric.pagePadding)
+            .padding(.vertical, 10)
+            .frame(maxWidth: Metric.pageMaxWidth, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .background(DesignColor.toolbar)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(DesignColor.hairline)
+                    .frame(height: 1)
+            }
+    }
+}
+
+// MARK: - Buttons
+
+enum AppButtonVariant {
+    case primary
+    case secondary
+    case quiet
+    case destructive
+}
+
+enum AppButtonSize {
+    case regular
+    case small
+    case mini
+
+    var font: Font {
+        switch self {
+        case .regular:
+            return .system(size: 13, weight: .medium)
+        case .small:
+            return .system(size: 12, weight: .medium)
+        case .mini:
+            return .system(size: 11, weight: .medium)
+        }
+    }
+
+    var horizontalPadding: CGFloat {
+        switch self {
+        case .regular:
+            return 12
+        case .small:
+            return 10
+        case .mini:
+            return 8
+        }
+    }
+
+    var verticalPadding: CGFloat {
+        switch self {
+        case .regular:
+            return 7
+        case .small:
+            return 5
+        case .mini:
+            return 4
+        }
+    }
+
+    var minHeight: CGFloat {
+        switch self {
+        case .regular:
+            return Metric.controlHeight
+        case .small:
+            return 26
+        case .mini:
+            return 23
+        }
+    }
+}
+
+/// 全应用统一的按钮外观。角色只表达层级，不改变控件语义。
+struct AppButtonStyle: ButtonStyle {
+    var variant: AppButtonVariant = .secondary
+    var size: AppButtonSize = .regular
+
+    func makeBody(configuration: Configuration) -> some View {
+        AppButtonChrome(configuration: configuration, variant: variant, size: size)
+    }
+
+    private struct AppButtonChrome: View {
+        let configuration: ButtonStyleConfiguration
+        let variant: AppButtonVariant
+        let size: AppButtonSize
+
+        @Environment(\.isEnabled) private var isEnabled
+        @Environment(\.isFocused) private var isFocused
+        @State private var isHovering = false
+
+        var body: some View {
+            configuration.label
+                .font(size.font)
+                .foregroundStyle(foregroundStyle)
+                .padding(.horizontal, size.horizontalPadding)
+                .padding(.vertical, size.verticalPadding)
+                .frame(minHeight: size.minHeight)
+                .background(backgroundStyle, in: shape)
+                .overlay {
+                    shape.strokeBorder(
+                        isFocused ? Color.accentColor.opacity(0.92) : borderColor,
+                        lineWidth: isFocused ? 2 : borderWidth
+                    )
+                }
+                .contentShape(shape)
+                .opacity(isEnabled ? (configuration.isPressed ? 0.76 : 1) : 0.46)
+                .scaleEffect(configuration.isPressed ? 0.985 : 1)
+                .onHover { hovering in
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        isHovering = hovering
+                    }
+                }
+                .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+        }
+
+        private var shape: RoundedRectangle {
+            RoundedRectangle(cornerRadius: Metric.controlRadius, style: .continuous)
+        }
+
+        private var foregroundStyle: Color {
+            switch variant {
+            case .primary:
+                return .white
+            case .secondary:
+                return .primary
+            case .quiet:
+                return isHovering ? .primary : .secondary
+            case .destructive:
+                return .red
+            }
+        }
+
+        private var backgroundStyle: Color {
+            switch variant {
+            case .primary:
+                return .accentColor
+            case .secondary:
+                return isHovering ? DesignColor.hover : DesignColor.control
+            case .quiet:
+                return isHovering ? DesignColor.hover : .clear
+            case .destructive:
+                return Color.red.opacity(isHovering ? 0.14 : 0.10)
+            }
+        }
+
+        private var borderColor: Color {
+            switch variant {
+            case .primary:
+                return Color.white.opacity(0.12)
+            case .secondary:
+                return DesignColor.hairline
+            case .quiet:
+                return .clear
+            case .destructive:
+                return Color.red.opacity(0.20)
+            }
+        }
+
+        private var borderWidth: CGFloat {
+            variant == .quiet ? 0 : 1
+        }
+    }
+}
+
+/// 方形图标按钮，和普通按钮共享 hover、按下与禁用反馈。
+struct AppIconButtonStyle: ButtonStyle {
+    enum Variant {
+        case quiet
+        case secondary
+    }
+
+    var variant: Variant = .quiet
+    var size: CGFloat = 28
+
+    func makeBody(configuration: Configuration) -> some View {
+        AppIconButtonChrome(configuration: configuration, variant: variant, size: size)
+    }
+
+    private struct AppIconButtonChrome: View {
+        let configuration: ButtonStyleConfiguration
+        let variant: Variant
+        let size: CGFloat
+
+        @Environment(\.isEnabled) private var isEnabled
+        @Environment(\.isFocused) private var isFocused
+        @State private var isHovering = false
+
+        var body: some View {
+            configuration.label
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(isHovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                .frame(width: size, height: size)
+                .background(backgroundStyle, in: shape)
+                .overlay {
+                    if isFocused {
+                        shape.strokeBorder(Color.accentColor.opacity(0.92), lineWidth: 2)
+                    } else if variant == .secondary {
+                        shape.strokeBorder(DesignColor.hairline, lineWidth: 1)
+                    }
+                }
+                .contentShape(shape)
+                .opacity(isEnabled ? (configuration.isPressed ? 0.72 : 1) : 0.42)
+                .scaleEffect(configuration.isPressed ? 0.97 : 1)
+                .onHover { hovering in
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        isHovering = hovering
+                    }
+                }
+        }
+
+        private var shape: RoundedRectangle {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+        }
+
+        private var backgroundStyle: Color {
+            switch variant {
+            case .quiet:
+                return isHovering ? DesignColor.hover : .clear
+            case .secondary:
+                return isHovering ? DesignColor.hover : DesignColor.control
+            }
+        }
+    }
+}
+
+extension View {
+    func appButton(
+        _ variant: AppButtonVariant = .secondary,
+        size: AppButtonSize = .regular
+    ) -> some View {
+        buttonStyle(AppButtonStyle(variant: variant, size: size))
+    }
+
+    func appIconButton(
+        _ variant: AppIconButtonStyle.Variant = .quiet,
+        size: CGFloat = 28
+    ) -> some View {
+        buttonStyle(AppIconButtonStyle(variant: variant, size: size))
     }
 }
 
@@ -348,7 +660,7 @@ struct SectionHeader: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             if let title {
                 Text(title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.primary)
             }
 
@@ -815,7 +1127,7 @@ struct ValueRow: View {
             } label: {
                 Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
             }
-            .buttonStyle(.borderless)
+            .appIconButton(size: 24)
             .help(didCopy ? "已复制" : "复制")
             .accessibilityLabel(didCopy ? "已复制 \(label)" : "复制\(label)")
             .disabled(!value.hasPrefix("/"))
@@ -825,7 +1137,7 @@ struct ValueRow: View {
             } label: {
                 Image(systemName: "folder")
             }
-            .buttonStyle(.borderless)
+            .appIconButton(size: 24)
             .help("在 Finder 中显示")
             .accessibilityLabel("在 Finder 中显示\(label)")
             .disabled(!pathExists)
@@ -835,162 +1147,6 @@ struct ValueRow: View {
 
     private var pathExists: Bool {
         value.hasPrefix("/") && FileManager.default.fileExists(atPath: value)
-    }
-}
-
-// MARK: - Version switcher
-
-/// 用原生下拉按钮而不是 `Menu`：`Menu` 在 `.borderlessButton` 样式下会把
-/// 标签里的 `Text` 提为标题、其余视图降级成前导图标，箭头会跑到版本号左边。
-/// `Picker` 得到的是标准 macOS 弹出按钮：数值在左、箭头在右，可点区域也正确。
-// MARK: - 版本 chip 切换器
-
-/// 单枚版本 chip：主角行的切换控件。
-///
-/// 选中的 chip 用强调色浅底 + 强调色描边；未选中用 well 底 + 发丝线；
-/// `isDashed` 把「安装」入口渲染成虚线描边。
-struct VersionChip: View {
-    var text: String = ""
-    var symbol: String? = nil
-    var isSelected = false
-    var isDashed = false
-
-    var body: some View {
-        HStack(spacing: 4) {
-            if let symbol {
-                Image(systemName: symbol)
-                    .font(.system(size: 9, weight: .semibold))
-            }
-            if !text.isEmpty {
-                Text(text)
-                    .font(.system(size: 12, weight: .medium))
-                    .monospacedDigit()
-            }
-        }
-        .foregroundStyle(foreground)
-        .padding(.horizontal, 9)
-        .frame(height: 24)
-        .background(backgroundShape, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .strokeBorder(borderColor, style: StrokeStyle(lineWidth: 1, dash: isDashed ? [3, 3] : []))
-        }
-        .help(text.isEmpty ? "更多操作" : text)
-        .accessibilityLabel(text.isEmpty ? "更多操作" : text)
-    }
-
-    private var foreground: AnyShapeStyle {
-        if isSelected {
-            return AnyShapeStyle(Color.accentColor)
-        }
-        if text.isEmpty {
-            return AnyShapeStyle(.tertiary)
-        }
-        return AnyShapeStyle(.secondary)
-    }
-
-    private var backgroundShape: AnyShapeStyle {
-        if isSelected {
-            return AnyShapeStyle(Color.accentColor.opacity(0.10))
-        }
-        return AnyShapeStyle(isDashed ? Color.clear : DesignColor.well)
-    }
-
-    private var borderColor: Color {
-        isSelected ? Color.accentColor.opacity(0.35) : DesignColor.hairline
-    }
-}
-
-/// 一排版本 chip：最多露出 3 枚，其余收进 `···` 溢出菜单；菜单里永远有「管理…」。
-/// 一个都没装时，换成虚线「安装」chip。
-struct VersionChipRow: View {
-    let kind: RuntimeKind
-    let options: [InstalledRuntime]
-    let selectionID: String?
-    var isDisabled: Bool
-    let onSelect: (InstalledRuntime) -> Void
-    var onInstall: () -> Void = {}
-
-    private static let maximumVisible = 3
-
-    var body: some View {
-        HStack(spacing: 6) {
-            ForEach(visibleOptions, id: \.id) { option in
-                Button {
-                    onSelect(option)
-                } label: {
-                    VersionChip(
-                        text: VersionLabel.display(kind, option.version),
-                        isSelected: option.id == selectionID
-                    )
-                }
-                .buttonStyle(.plain)
-                .disabled(isDisabled)
-                .help("切换到 \(VersionLabel.display(kind, option.version))")
-            }
-
-            if !options.isEmpty {
-                Menu {
-                    ForEach(overflowOptions, id: \.id) { option in
-                        Button {
-                            onSelect(option)
-                        } label: {
-                            HStack(spacing: 6) {
-                                Text(VersionLabel.display(kind, option.version))
-                                    .monospacedDigit()
-                                if option.id == selectionID {
-                                    Image(systemName: "checkmark")
-                                        .font(.caption2.weight(.semibold))
-                                }
-                            }
-                        }
-                    }
-                    if !overflowOptions.isEmpty {
-                        Divider()
-                    }
-                    Button("管理\(kind.title)版本…") {
-                        onInstall()
-                    }
-                } label: {
-                    VersionChip(symbol: "ellipsis")
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .disabled(isDisabled)
-                .help("管理\(kind.title)版本")
-            } else {
-                Button {
-                    onInstall()
-                } label: {
-                    VersionChip(text: "安装", symbol: "plus", isDashed: true)
-                }
-                .buttonStyle(.plain)
-                .disabled(isDisabled)
-                .help("安装 \(kind.title)")
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("切换 \(kind.title) 版本")
-    }
-
-    /// 最多 3 枚 chip；当前版本若没排进前三，顶到最前，其余保持原顺序。
-    private var visibleOptions: [InstalledRuntime] {
-        let head = Array(options.prefix(Self.maximumVisible))
-        guard let current = options.first(where: { $0.id == selectionID }),
-              !head.contains(where: { $0.id == current.id }) else {
-            return head
-        }
-        var result = [current]
-        for option in options where option.id != current.id && result.count < Self.maximumVisible {
-            result.append(option)
-        }
-        return result
-    }
-
-    private var overflowOptions: [InstalledRuntime] {
-        let visibleIDs = Set(visibleOptions.map { $0.id })
-        return options.filter { !visibleIDs.contains($0.id) }
     }
 }
 
@@ -1030,9 +1186,9 @@ struct SelectableRowStyle: ButtonStyle {
 
         private var fill: Color {
             if isSelected {
-                return Color.accentColor.opacity(0.16)
+                return DesignColor.selection
             }
-            return isHovering ? Color.primary.opacity(0.07) : Color.clear
+            return isHovering ? DesignColor.hover : Color.clear
         }
     }
 }
@@ -1078,8 +1234,7 @@ struct StatusBar: View {
                 } label: {
                     Image(systemName: "xmark")
                 }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
+                .appIconButton(size: 24)
                 .help("关闭提示")
             }
         }

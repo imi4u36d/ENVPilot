@@ -56,6 +56,7 @@ final class JavaAndShellIntegrationTests: XCTestCase {
         XCTAssertTrue(script.contains("export ENVPILOT_EFFECTIVE_NODE_VERSION='14.21.3'"))
         XCTAssertTrue(script.contains("export ENVPILOT_NODE_HOME='\(nodeHome)'"))
         XCTAssertTrue(script.contains("export PATH=\"$ENVPILOT_NODE_HOME/bin:$PATH\""))
+        XCTAssertTrue(script.contains("export PATH=\"$HOME/.envpilot/tools:$PATH\""))
         XCTAssertFalse(script.contains("nvm use"))
     }
 

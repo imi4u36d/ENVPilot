@@ -5,20 +5,29 @@ import SwiftUI
 struct ENVPilotApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store: NodeRuntimeStore
+    @StateObject private var aiStore: AIEnvironmentStore
+    @StateObject private var packageManagerStore: PackageManagerStore
     @StateObject private var updates: AppUpdateModel
     @StateObject private var loginItem: LoginItemModel
+    @StateObject private var environmentCheck: EnvironmentCheckStore
     @AppStorage(AppPreferenceKey.showsMenuBarMenu) private var showsMenuBarMenu = true
 
     init() {
         let store = NodeRuntimeStore()
+        let aiStore = AIEnvironmentStore()
+        let packageManagerStore = PackageManagerStore()
         let updates = AppUpdateModel()
+        let environmentCheck = EnvironmentCheckStore(runtimeStore: store, aiStore: aiStore)
         _store = StateObject(wrappedValue: store)
+        _aiStore = StateObject(wrappedValue: aiStore)
+        _packageManagerStore = StateObject(wrappedValue: packageManagerStore)
         _updates = StateObject(wrappedValue: updates)
         _loginItem = StateObject(wrappedValue: LoginItemModel())
+        _environmentCheck = StateObject(wrappedValue: environmentCheck)
         LoginItemProbe.runIfRequested()
         UpdateProbe.runIfRequested()
         MenuBarSnapshot.runIfRequested(store: store, updates: updates)
-        WindowSnapshot.runIfRequested(store: store, updates: updates)
+        WindowSnapshot.runIfRequested(store: store, aiStore: aiStore, updates: updates)
         PerfProbe.load()
         PerfProbe.runIfRequested(store: store)
         // 延后一点再自动检查：离屏探针/快照（WindowSnapshot、MenuBarSnapshot、
@@ -37,7 +46,13 @@ struct ENVPilotApp: App {
 
     var body: some Scene {
         Window("ENVPilot", id: "main") {
-            RootView(store: store, updates: updates)
+            RootView(
+                store: store,
+                aiStore: aiStore,
+                packageManagerStore: packageManagerStore,
+                updates: updates,
+                environmentCheck: environmentCheck
+            )
                 .frame(minWidth: 880, minHeight: 560)
         }
         .defaultSize(width: 1120, height: 740)

@@ -5,7 +5,9 @@ import ENVPilotCore
 
 struct OverviewView: View {
     @ObservedObject var store: NodeRuntimeStore
+    @ObservedObject var aiStore: AIEnvironmentStore
     var onOpenRuntime: (RuntimeKind) -> Void
+    var onOpenAI: (AIEnvironmentKind) -> Void
 
     @State private var showsScript = false
     @State private var showsPaths = false
@@ -43,6 +45,7 @@ struct OverviewView: View {
                     onboardingSection
                 }
                 currentEnvironmentSection
+                aiEnvironmentSection
                 terminalSection
                 pathsSection
             }
@@ -56,42 +59,47 @@ struct OverviewView: View {
             EmptyState(
                 symbol: "shippingbox",
                 title: "本机还没有 ENVPilot 管理的运行时",
-                message: "安装一个版本后，这里会显示终端将要使用的版本。"
+                message: "前往运行时页安装版本后，这里会显示终端将要使用的版本。"
             ) {
-                HStack(spacing: 8) {
-                    ForEach(RuntimeKind.allCases) { kind in
-                        Button("安装 \(kind.title)") {
-                            onOpenRuntime(kind)
-                        }
-                        .buttonStyle(.bordered)
-                    }
+                Button("前往运行时") {
+                    onOpenRuntime(.node)
                 }
+                .appButton(.secondary, size: .small)
             }
         }
     }
 
     // MARK: 当前环境
 
-    /// 主角行：大号等宽版本号是展示的重心，版本 chip 是切换器。
-    /// 行间不用分隔线而用 hover 底色，读起来像「三个环境对象」，不是一张表格。
+    /// 大号等宽版本号是展示的重心；版本切换和安装留在运行时页。
     private var currentEnvironmentSection: some View {
         GroupSection(title: "当前环境", hint: "全局生效") {
-            VStack(spacing: 6) {
-                ForEach(store.summaries) { summary in
-                    EnvironmentHeroRow(
-                        summary: summary,
-                        isSwitching: store.isBusy(key: "switch:\(summary.kind.rawValue)"),
-                        isDisabled: store.isBusy,
-                        onSelect: { option in
-                            Task { await store.selectDefault(option) }
-                        },
-                        onInstall: {
-                            onOpenRuntime(summary.kind)
-                        }
-                    )
+            VStack(spacing: 0) {
+                ForEach(Array(store.summaries.enumerated()), id: \.element.id) { index, summary in
+                    GroupRow(dividerAbove: index > 0) {
+                        EnvironmentHeroRow(summary: summary)
+                    }
                 }
             }
-            .padding(8)
+        }
+    }
+
+    // MARK: AI 环境
+
+    private var aiEnvironmentSection: some View {
+        GroupSection(
+            title: "AI 环境",
+            hint: "已安装 \(aiStore.installedCount) / \(AIEnvironmentKind.allCases.count)"
+        ) {
+            VStack(spacing: 0) {
+                ForEach(Array(aiStore.statuses.enumerated()), id: \.element.id) { index, status in
+                    GroupRow(dividerAbove: index > 0) {
+                        AIEnvironmentOverviewRow(status: status) {
+                            onOpenAI(status.kind)
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -111,8 +119,7 @@ struct OverviewView: View {
                     } label: {
                         Label("复制", systemImage: "doc.on.doc")
                     }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
+                    .appButton(.quiet, size: .small)
                     .disabled(activationScript.isEmpty)
                     .help("复制终端将执行的导出语句")
                 ),
@@ -163,15 +170,9 @@ struct OverviewView: View {
 
 // MARK: - 主角行
 
-/// 「当前环境」里的一行：徽章 + 大号版本号 + 名称/路径 + chip 切换器。
+/// 「当前环境」里的一行：徽章 + 大号版本号 + 名称/路径/状态。
 private struct EnvironmentHeroRow: View {
     let summary: RuntimeSummary
-    let isSwitching: Bool
-    let isDisabled: Bool
-    let onSelect: (InstalledRuntime) -> Void
-    let onInstall: () -> Void
-
-    @State private var isHovering = false
 
     private var isActive: Bool {
         summary.current != nil
@@ -179,14 +180,14 @@ private struct EnvironmentHeroRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            RuntimeBadge(kind: summary.kind, size: 24, isActive: isActive)
+            RuntimeBadge(kind: summary.kind, size: 26, isActive: isActive)
 
             Text(isActive ? VersionLabel.display(summary.kind, summary.version) : "—")
-                .font(.system(size: 22, weight: .semibold, design: .rounded))
+                .font(.system(size: 18, weight: .semibold, design: .monospaced))
                 .monospacedDigit()
                 .foregroundStyle(isActive ? AnyShapeStyle(Color.primary) : AnyShapeStyle(.tertiary))
                 // 固定列宽：三种运行时的名称列与 chip 列纵向对齐。
-                .frame(width: 128, alignment: .leading)
+                .frame(width: 118, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 7) {
@@ -196,6 +197,61 @@ private struct EnvironmentHeroRow: View {
                     if !summary.isCurrentValid {
                         Pill("配置缺失", tone: .warning)
                     } else if !isActive {
+                        Pill(summary.options.isEmpty ? "未安装" : "未选择", tone: .neutral)
+                    } else {
+                        Pill("当前使用", tone: .positive, symbol: "checkmark.circle.fill")
+                    }
+                }
+
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(detail)
+            }
+
+            Spacer(minLength: 12)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(summary.kind.title) \(isActive ? summary.version : "未安装")")
+    }
+
+    private var detail: String {
+        guard !summary.options.isEmpty else {
+            return "尚未安装，安装后即可使用"
+        }
+        guard let path = summary.path else {
+            return "未选择运行时"
+        }
+        return path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+    }
+}
+
+// MARK: - AI 环境行
+
+private struct AIEnvironmentOverviewRow: View {
+    let status: AIEnvironmentStatus
+    let onOpenUpdate: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            AIEnvironmentBadge(kind: status.kind, size: 26)
+
+            Text(status.currentVersion ?? "—")
+                .font(.system(size: 18, weight: .semibold, design: .monospaced))
+                .monospacedDigit()
+                .foregroundStyle(status.isInstalled ? AnyShapeStyle(Color.primary) : AnyShapeStyle(.tertiary))
+                .frame(width: 118, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 7) {
+                    Text(status.kind.displayName)
+                        .font(.callout.weight(.medium))
+
+                    if status.isInstalled {
+                        Pill(status.installMethod.label, tone: .neutral)
+                    } else {
                         Pill("未安装", tone: .neutral)
                     }
                 }
@@ -210,39 +266,44 @@ private struct EnvironmentHeroRow: View {
 
             Spacer(minLength: 12)
 
-            if isSwitching {
-                ProgressView()
-                    .controlSize(.small)
-            } else {
-                VersionChipRow(
-                    kind: summary.kind,
-                    options: summary.options,
-                    selectionID: summary.current?.id,
-                    isDisabled: isDisabled,
-                    onSelect: onSelect,
-                    onInstall: onInstall
-                )
+            if status.updateAvailable, let latestVersion = status.latestVersion {
+                OverviewUpdateTip(version: latestVersion, action: onOpenUpdate)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .background(
-            DesignColor.well.opacity(isHovering ? 1 : 0),
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-        )
-        .onHover { isHovering = $0 }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(summary.kind.title) \(isActive ? summary.version : "未安装")")
+        .accessibilityLabel("\(status.kind.displayName) \(status.currentVersion ?? "未安装")")
     }
 
     private var detail: String {
-        guard !summary.options.isEmpty else {
-            return "尚未安装，安装后即可使用"
+        guard let executablePath = status.executablePath else {
+            return status.kind.subtitle
         }
-        guard let path = summary.path else {
-            return "未选择运行时"
+        return executablePath.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+    }
+}
+
+private struct OverviewUpdateTip: View {
+    let version: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.down.circle")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("可更新至 \(version)")
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .bold))
+            }
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(Color.orange)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Color.orange.opacity(0.12), in: Capsule())
         }
-        return path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+        .buttonStyle(.plain)
+        .help("前往 AI 环境页更新 \(version)")
+        .accessibilityLabel("可更新至 \(version)，前往 AI 环境页")
     }
 }
 

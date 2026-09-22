@@ -32,7 +32,7 @@ jobs:
     # 签名证书的两个 Secret（ENVPILOT_SIGNING_P12 / ENVPILOT_SIGNING_P12_PASSWORD）
     # 挂在这个 Environment 上并设了 required reviewers：
     # job 先卡在「等待批准」，批准之后才把 Secret 下发。所以即使有人能推 tag，
-    # 也拿不到私钥。Secret 没配时导入步骤跳过，package_app.sh 回退 ad-hoc。
+    # 也拿不到私钥。Secret 没配时导入步骤跳过，create_dmg.sh 回退 ad-hoc。
     environment: release-signing
     permissions:
       contents: write # 只有打 tag 那条路径要建 Release，其余步骤用不到
@@ -75,7 +75,7 @@ jobs:
         run: swift test
 
       # 把签名证书放进一个一次性的临时钥匙串。runner 跑完就销毁，钥匙串不会留下。
-      # Secret 没配（比如新克隆的仓库）就直接跳过，package_app.sh 会自己回退
+      # Secret 没配（比如新克隆的仓库）就直接跳过，create_dmg.sh 会自己回退
       # ad-hoc——那里是有意为之的兜底，不是故障。
       # 注意：secret 不能直接写进 `if:`，所以这里用 env + shell 判断。
       - name: Import signing certificate
@@ -85,7 +85,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${SIGNING_P12}" ]]; then
-            echo "未配置 ENVPILOT_SIGNING_P12，跳过导入；package_app.sh 将回退 ad-hoc。"
+            echo "未配置 ENVPILOT_SIGNING_P12，跳过导入；create_dmg.sh 将回退 ad-hoc。"
             exit 0
           fi
           KEYCHAIN="$RUNNER_TEMP/envpilot-signing.keychain-db"
@@ -99,18 +99,18 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
           rm -f "$RUNNER_TEMP/signing.p12"
-          # 必须进搜索列表：package_app.sh 用 `security find-identity -v -p codesigning`
+          # 必须进搜索列表：create_dmg.sh 用 `security find-identity -v -p codesigning`
           # 判断身份在不在，而那个命令只看搜索列表里的钥匙串。
           security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
           security find-identity -v -p codesigning "$KEYCHAIN"
 
       # 一条脚本走完：swift build -c release → 组装 .app → 签名 → 打 DMG → sha256。
       # 版本号经 APP_VERSION 注入；签名身份自动取搜索列表里第一个有效身份。
-      - name: Build and package app
+      - name: Create DMG
         env:
           APP_VERSION: ${{ steps.version.outputs.numeric }}
           APP_BUILD: ${{ github.run_number }}
-        run: ./scripts/package_app.sh release
+        run: ./scripts/create_dmg.sh
 
       - name: Verify bundle
         run: |

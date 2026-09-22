@@ -95,8 +95,7 @@ struct UpdateSettingsCard: View {
         } label: {
             Label("检查更新", systemImage: "arrow.triangle.2.circlepath")
         }
-        .buttonStyle(.borderless)
-        .controlSize(.small)
+        .appButton(.quiet, size: .small)
         .disabled(model.isBusy)
     }
 
@@ -169,20 +168,17 @@ struct UpdateSettingsCard: View {
                 Button(model.canSelfUpdate ? "更新到 v\(release.version)" : "下载 ENVPilot \(release.version)") {
                     Task { await model.install() }
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .appButton(.primary, size: .small)
             case .failed:
                 Button("重试") {
                     Task { await model.check() }
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .appButton(.secondary, size: .small)
             case .manual(_, let location):
                 Button("在 Finder 中显示") {
                     model.revealDownload(location)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .appButton(.secondary, size: .small)
             default:
                 EmptyView()
             }
@@ -191,8 +187,7 @@ struct UpdateSettingsCard: View {
                 Button("打开发布页") {
                     model.openReleasePage()
                 }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
+                .appButton(.quiet, size: .small)
             }
 
             Spacer(minLength: 0)

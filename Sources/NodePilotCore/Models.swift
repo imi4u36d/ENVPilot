@@ -111,6 +111,53 @@ public struct JavaDownloadCandidate: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+public struct PackageManagerMirrorSettings: Codable, Equatable, Sendable {
+    public var npm: String?
+    public var pnpm: String?
+    public var homebrew: String?
+    public var uv: String?
+
+    public init(
+        npm: String? = nil,
+        pnpm: String? = nil,
+        homebrew: String? = nil,
+        uv: String? = nil
+    ) {
+        self.npm = npm
+        self.pnpm = pnpm
+        self.homebrew = homebrew
+        self.uv = uv
+    }
+
+    public func address(for kind: PackageManagerKind) -> String? {
+        switch kind {
+        case .npm:
+            return npm
+        case .pnpm:
+            return pnpm
+        case .homebrew:
+            return homebrew
+        case .uv:
+            return uv
+        }
+    }
+
+    public mutating func setAddress(_ address: String?, for kind: PackageManagerKind) {
+        let normalized = address?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = normalized?.isEmpty == false ? normalized : nil
+        switch kind {
+        case .npm:
+            npm = value
+        case .pnpm:
+            pnpm = value
+        case .homebrew:
+            homebrew = value
+        case .uv:
+            uv = value
+        }
+    }
+}
+
 /// 终端要用的运行时版本只来自这里（全局选择）。
 ///
 /// 旧版本在这里还有 `selectedProfileID` / `profiles`（环境预设）与
@@ -127,6 +174,7 @@ public struct AppSettings: Codable, Sendable {
     public var cachedNodeInstallations: [NodeInstallation]?
     public var cachedJavaInstallations: [JavaInstallation]?
     public var cachedPythonInstallations: [PythonInstallation]?
+    public var packageManagerMirrors: PackageManagerMirrorSettings
 
     public init(
         selectedVersion: String? = nil,
@@ -137,7 +185,8 @@ public struct AppSettings: Codable, Sendable {
         selectedPythonHome: String? = nil,
         cachedNodeInstallations: [NodeInstallation]? = nil,
         cachedJavaInstallations: [JavaInstallation]? = nil,
-        cachedPythonInstallations: [PythonInstallation]? = nil
+        cachedPythonInstallations: [PythonInstallation]? = nil,
+        packageManagerMirrors: PackageManagerMirrorSettings = PackageManagerMirrorSettings()
     ) {
         self.selectedVersion = selectedVersion
         self.selectedNodePath = selectedNodePath
@@ -148,6 +197,60 @@ public struct AppSettings: Codable, Sendable {
         self.cachedNodeInstallations = cachedNodeInstallations
         self.cachedJavaInstallations = cachedJavaInstallations
         self.cachedPythonInstallations = cachedPythonInstallations
+        self.packageManagerMirrors = packageManagerMirrors
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case selectedVersion
+        case selectedNodePath
+        case selectedJavaVersion
+        case selectedJavaHome
+        case selectedPythonVersion
+        case selectedPythonHome
+        case cachedNodeInstallations
+        case cachedJavaInstallations
+        case cachedPythonInstallations
+        case packageManagerMirrors
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        selectedVersion = try container.decodeIfPresent(String.self, forKey: .selectedVersion)
+        selectedNodePath = try container.decodeIfPresent(String.self, forKey: .selectedNodePath)
+        selectedJavaVersion = try container.decodeIfPresent(String.self, forKey: .selectedJavaVersion)
+        selectedJavaHome = try container.decodeIfPresent(String.self, forKey: .selectedJavaHome)
+        selectedPythonVersion = try container.decodeIfPresent(String.self, forKey: .selectedPythonVersion)
+        selectedPythonHome = try container.decodeIfPresent(String.self, forKey: .selectedPythonHome)
+        cachedNodeInstallations = try container.decodeIfPresent(
+            [NodeInstallation].self,
+            forKey: .cachedNodeInstallations
+        )
+        cachedJavaInstallations = try container.decodeIfPresent(
+            [JavaInstallation].self,
+            forKey: .cachedJavaInstallations
+        )
+        cachedPythonInstallations = try container.decodeIfPresent(
+            [PythonInstallation].self,
+            forKey: .cachedPythonInstallations
+        )
+        packageManagerMirrors = try container.decodeIfPresent(
+            PackageManagerMirrorSettings.self,
+            forKey: .packageManagerMirrors
+        ) ?? PackageManagerMirrorSettings()
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(selectedVersion, forKey: .selectedVersion)
+        try container.encodeIfPresent(selectedNodePath, forKey: .selectedNodePath)
+        try container.encodeIfPresent(selectedJavaVersion, forKey: .selectedJavaVersion)
+        try container.encodeIfPresent(selectedJavaHome, forKey: .selectedJavaHome)
+        try container.encodeIfPresent(selectedPythonVersion, forKey: .selectedPythonVersion)
+        try container.encodeIfPresent(selectedPythonHome, forKey: .selectedPythonHome)
+        try container.encodeIfPresent(cachedNodeInstallations, forKey: .cachedNodeInstallations)
+        try container.encodeIfPresent(cachedJavaInstallations, forKey: .cachedJavaInstallations)
+        try container.encodeIfPresent(cachedPythonInstallations, forKey: .cachedPythonInstallations)
+        try container.encode(packageManagerMirrors, forKey: .packageManagerMirrors)
     }
 }
 

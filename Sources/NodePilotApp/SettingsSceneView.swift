@@ -19,23 +19,43 @@ struct SettingsRootView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 16) {
+                settingsHeader
                 menuBarCard
                 launchCard
                 UpdateSettingsCard(model: updates)
                 terminalCard
                 storageCard
             }
-            .padding(20)
-            .frame(maxWidth: 560, alignment: .leading)
+            .padding(22)
+            .frame(maxWidth: 640, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
-        .frame(width: 600, height: 500)
+        .frame(width: 640, height: 560)
         .scrollContentBackground(.hidden)
         .background(DesignColor.canvas)
     }
 
     // MARK: Cards
+
+    private var settingsHeader: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("设置")
+                    .font(.system(size: 20, weight: .semibold))
+                Text("配置菜单栏、启动方式和终端环境")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 12)
+
+            Text("ENVPilot \(SettingsPaths.appVersion)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.bottom, 2)
+    }
 
     private var menuBarCard: some View {
         Card("菜单栏") {
@@ -98,8 +118,7 @@ struct SettingsRootView: View {
                 } label: {
                     Label("复制诊断信息", systemImage: "doc.on.doc")
                 }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
+                .appButton(.quiet, size: .small)
             )
         ) {
             VStack(alignment: .leading, spacing: 10) {

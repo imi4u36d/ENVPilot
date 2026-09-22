@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ENVPilot · 概览页「当前环境」重设计原型</title>
+<style>
+/* ============================================================
+   设计 token —— 与 DesignKit.swift 一一对应
+   canvas / group / well / hairline / 圆角 / 间距
+   ============================================================ */
+:root{
+  --canvas:#ffffff;
+  --group:#ffffff;
+  --well:rgba(0,0,0,0.04);
+  --hairline:rgba(0,0,0,0.11);
+  --divider:rgba(0,0,0,0.08);
+  --text:#1d1d1f;
+  --text-2:rgba(60,60,67,0.62);
+  --text-3:rgba(60,60,67,0.36);
+  --accent:#007aff;
+  --tint-node:#3da866;
+  --tint-java:#db7d29;
+  --tint-py:#4282d1;
+  --pill-pos-bg:rgba(52,199,89,0.12);
+  --pill-pos-fg:#248a3d;
+  --pill-warn-bg:rgba(255,159,10,0.14);
+  --pill-warn-fg:#b25000;
+  --pill-neu-bg:rgba(120,120,128,0.12);
+  --pill-neu-fg:rgba(60,60,67,0.7);
+  --sel-chip-bg:rgba(0,122,255,0.10);
+  --sel-chip-fg:#007aff;
+  --sel-chip-border:rgba(0,122,255,0.35);
+  --stage-bg:#e9e9ec;
+  --menu-bg:#ffffff;
+  --shadow:0 24px 80px rgba(0,0,0,0.20), 0 2px 8px rgba(0,0,0,0.08);
+  --r-font:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Helvetica Neue",sans-serif;
+  --u-font:ui-rounded,"SF Pro Rounded",-apple-system,"PingFang SC",sans-serif;
+}
+html[data-theme="dark"]{
+  --canvas:#000000;
+  --group:rgba(255,255,255,0.055);
+  --well:rgba(255,255,255,0.06);
+  --hairline:rgba(255,255,255,0.14);
+  --divider:rgba(255,255,255,0.10);
+  --text:#f5f5f7;
+  --text-2:rgba(235,235,245,0.60);
+  --text-3:rgba(235,235,245,0.34);
+  --accent:#0a84ff;
+  --pill-pos-bg:rgba(48,209,88,0.18);
+  --pill-pos-fg:#30d158;
+  --pill-warn-bg:rgba(255,159,10,0.20);
+  --pill-warn-fg:#ff9f0a;
+  --pill-neu-bg:rgba(235,235,245,0.14);
+  --pill-neu-fg:rgba(235,235,245,0.75);
+  --sel-chip-bg:rgba(10,132,255,0.16);
+  --sel-chip-fg:#409cff;
+  --sel-chip-border:rgba(10,132,255,0.45);
+  --stage-bg:#141416;
+  --menu-bg:rgba(30,30,32,0.97);
+  --shadow:0 24px 80px rgba(0,0,0,0.6), 0 2px 8px rgba(0,0,0,0.4);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  font-family:var(--r-font);
+  background:var(--stage-bg);
+  color:var(--text);
+  -webkit-font-smoothing:antialiased;
+  display:flex;align-items:flex-start;justify-content:center;
+  padding:28px 16px 48px;
+  transition:background .25s;
+}
+button{font-family:inherit;cursor:pointer}
+
+/* ================= 原型控制台（不属于 App） ================= */
+.mockbar{
+  position:fixed;top:14px;left:50%;transform:translateX(-50%);
+  z-index:50;display:flex;align-items:center;gap:10px;
+  background:rgba(28,28,30,0.92);backdrop-filter:blur(12px);
+  color:#f5f5f7;border-radius:12px;padding:8px 10px 8px 14px;
+  box-shadow:0 8px 30px rgba(0,0,0,.35);
+  font-size:12px;
+}
+.mockbar .lbl{font-weight:600;letter-spacing:.2px;opacity:.92;white-space:nowrap}
+.mockbar .hint{opacity:.5;white-space:nowrap}
+.seg{display:flex;background:rgba(255,255,255,.12);border-radius:8px;padding:2px}
+.seg button{
+  border:0;background:transparent;color:rgba(245,245,247,.65);
+  font-size:12px;font-weight:500;padding:5px 10px;border-radius:6px;
+  transition:all .15s;white-space:nowrap;
+}
+.seg button.on{background:#f5f5f7;color:#1d1d1f}
+#themeBtn{
+  border:0;border-radius:8px;width:30px;height:30px;
+  background:rgba(255,255,255,.12);color:#f5f5f7;
+  display:flex;align-items:center;justify-content:center;
+}
+
+/* ================= 窗口 ================= */
+.window{
+  width:min(1080px,100%);
+  height:680px;
+  background:var(--canvas);
+  border:1px solid var(--hairline);
+  border-radius:11px;
+  box-shadow:var(--shadow);
+  overflow:hidden;
+  display:flex;flex-direction:column;
+  margin-top:52px;
+  transition:background .25s;
+}
+.titlebar{
+  height:42px;flex:none;display:flex;align-items:center;
+  padding:0 14px;gap:8px;
+  -webkit-app-region:drag;
+}
+.tl{width:12px;height:12px;border-radius:50%}
+.tl.r{background:#ff5f57}.tl.y{background:#febc2e}.tl.g{background:#28c840}
+.titlebar .spacer{flex:1}
+.winbtn{
+  width:30px;height:26px;border:0;background:transparent;border-radius:6px;
+  color:var(--text-3);display:flex;align-items:center;justify-content:center;
+}
+.winbtn:hover{background:var(--well);color:var(--text-2)}
+
+.window-body{flex:1;display:flex;min-height:0}
+
+/* ================= 侧边栏 ================= */
+.sidebar{
+  width:196px;flex:none;
+  display:flex;flex-direction:column;
+  padding:6px 10px 14px;
+  border-right:1px solid var(--divider);
+}
+.brand{display:flex;align-items:center;gap:10px;padding:10px 8px 14px}
+.brand .logo{
+  width:36px;height:36px;border-radius:9px;flex:none;
+  background:linear-gradient(135deg,#3d8bfd,#2f6fe0);
+  display:flex;align-items:center;justify-content:center;color:#fff;
+}
+.brand .name{font-size:14px;font-weight:700;letter-spacing:.1px;line-height:1.2}
+.brand .sub{font-size:11px;color:var(--text-2);margin-top:1px}
+.nav{display:flex;flex-direction:column;gap:3px}
+.nav button{
+  display:flex;align-items:center;gap:9px;
+  border:0;background:transparent;border-radius:8px;
+  padding:7px 10px;font-size:13px;font-weight:500;color:var(--text-2);
+  text-align:left;transition:background .15s,color .15s;
+}
+.nav button:hover{background:var(--well)}
+.nav button.on{background:var(--sel-chip-bg);color:var(--sel-chip-fg)}
+.nav svg{flex:none}
+
+/* ================= 内容页 ================= */
+.content{
+  flex:1;min-width:0;overflow-y:auto;
+  background:var(--canvas);
+}
+.page{
+  max-width:1000px;margin:0 auto;
+  padding:20px 24px 28px;
+  display:flex;flex-direction:column;gap:22px; /* Metric.sectionSpacing */
+}
+
+/* 分组 */
+.section-head{
+  display:flex;align-items:baseline;gap:8px;
+  padding:0 2px 7px;
+}
+.section-head h2{font-size:13px;font-weight:600}
+.section-head .hint{margin-left:auto;font-size:11px;color:var(--text-2)}
+.card{
+  background:var(--group);
+  border:1px solid var(--hairline);
+  border-radius:10px;
+}
+.card .foot{
+  font-size:11px;color:var(--text-2);
+  padding:7px 2px 0;
+}
+
+/* pill */
+.pill{
+  display:inline-flex;align-items:center;gap:3px;
+  font-size:11px;font-weight:500;line-height:1;
+  padding:3px 7px;border-radius:999px;white-space:nowrap;
+}
+.pill.pos{background:var(--pill-pos-bg);color:var(--pill-pos-fg)}
+.pill.warn{background:var(--pill-warn-bg);color:var(--pill-warn-fg)}
+.pill.neu{background:var(--pill-neu-bg);color:var(--pill-neu-fg)}
+
+/* badge */
+.badge{
+  border-radius:9px;flex:none;
+  background:color-mix(in srgb,var(--t) 15%,transparent);
+  color:var(--t);
+  display:flex;align-items:center;justify-content:center;
+}
+.badge.muted{background:var(--well);color:var(--text-3)}
+.badge.s30{width:30px;height:30px}
+.badge.s34{width:34px;height:34px;border-radius:10px}
+.badge.s24{width:24px;height:24px;border-radius:7px}
+
+/* ============================================================
+   方案 A：磁贴网格（Xcode 组件页形态）
+   ============================================================ */
+.tiles{
+  display:grid;grid-template-columns:repeat(3,1fr);
+  gap:12px;padding:12px;
+}
+.tile{
+  position:relative;
+  border:1px solid var(--hairline);
+  border-radius:8px;
+  background:var(--group);
+  padding:14px 16px 15px;
+  display:flex;flex-direction:column;gap:0;
+  min-height:158px;
+  transition:border-color .2s, background .2s;
+}
+.tile:hover{border-color:color-mix(in srgb,var(--t) 45%,var(--hairline))}
+.tile .t-head{display:flex;align-items:center;gap:9px}
+.tile .t-name{font-size:13px;font-weight:600}
+.tile .t-head .pill{margin-left:auto}
+.tile .t-hero{
+  margin-top:10px;
+  font-family:var(--u-font);
+  font-size:30px;font-weight:600;letter-spacing:-0.4px;
+  font-variant-numeric:tabular-nums;
+  line-height:1.1;
+}
+.tile .t-hero.none{color:var(--text-3);font-weight:500}
+.tile .t-sub{
+  margin-top:5px;
+  font-size:11px;color:var(--text-3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  display:flex;align-items:center;gap:4px;
+}
+.tile .t-sub svg{flex:none;opacity:.75}
+.tile .chips{margin-top:auto;padding-top:12px;display:flex;flex-wrap:wrap;gap:6px}
+.tile.muted .t-hero,.tile.muted .t-sub{color:var(--text-3)}
+
+/* chip 切换器 */
+.chip{
+  position:relative;
+  display:inline-flex;align-items:center;gap:4px;
+  height:24px;padding:0 9px;border-radius:7px;
+  border:1px solid var(--hairline);
+  background:var(--well);
+  color:var(--text-2);
+  font-size:12px;font-weight:500;font-variant-numeric:tabular-nums;
+  transition:all .13s;white-space:nowrap;
+}
+.chip:hover{border-color:color-mix(in srgb,var(--t,#8e8e93) 45%,var(--hairline));color:var(--text)}
+.chip.sel{
+  background:var(--sel-chip-bg);
+  border-color:var(--sel-chip-border);
+  color:var(--sel-chip-fg);
+}
+.chip.sel:hover{color:var(--sel-chip-fg)}
+.chip.add{border-style:dashed;background:transparent}
+.chip.spin::before{
+  content:"";width:10px;height:10px;border-radius:50%;
+  border:1.5px solid var(--hairline);border-top-color:var(--text-2);
+  animation:spin .7s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* 溢出菜单 */
+.chip .menu, .select .menu{
+  position:absolute;bottom:calc(100% + 6px);right:0;z-index:30;
+  min-width:150px;
+  background:var(--menu-bg);
+  border:1px solid var(--hairline);
+  border-radius:9px;
+  box-shadow:0 10px 34px rgba(0,0,0,.22);
+  padding:5px;
+  display:none;
+}
+.chip .menu.open,.select .menu.open{display:block;animation:menuIn .14s ease}
+@keyframes menuIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.menu-item{
+  display:flex;align-items:center;gap:7px;width:100%;
+  border:0;background:transparent;text-align:left;
+  font-size:12px;font-weight:500;color:var(--text);
+  font-variant-numeric:tabular-nums;
+  padding:6px 9px;border-radius:6px;
+}
+.menu-item:hover{background:var(--well)}
+.menu-item.sel{color:var(--sel-chip-fg);font-weight:600}
+.menu-item .tick{width:12px;opacity:0}
+.menu-item.sel .tick{opacity:1}
+.menu-sep{height:1px;background:var(--divider);margin:5px 4px}
+.menu-item.mute{color:var(--text-2)}
+
+/* 版本号切换动画 */
+.hero-swap{animation:heroSwap .22s ease}
+@keyframes heroSwap{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+
+/* ============================================================
+   方案 B：行式，版本号主角
+   ============================================================ */
+.hero-rows{padding:8px;display:flex;flex-direction:column;gap:6px}
+.hrow{
+  display:flex;align-items:center;gap:14px;
+  padding:12px 14px;border-radius:8px;
+  transition:background .13s;
+}
+.hrow:hover{background:var(--well)}
+.hrow .hv{
+  font-family:var(--u-font);
+  font-size:22px;font-weight:600;letter-spacing:-0.3px;
+  font-variant-numeric:tabular-nums;
+  width:128px;flex:none;line-height:1.15;
+}
+.hrow .hv.none{color:var(--text-3);font-weight:500}
+.hrow .h-id{display:flex;flex-direction:column;gap:2px;min-width:0}
+.hrow .h-id .n{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600}
+.hrow .h-id .p{font-size:11px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hrow .chips{margin-left:auto;padding-top:0;display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+
+/* ============================================================
+   现状：忠实复刻当前实现（行 + 右侧下拉）
+   ============================================================ */
+.cur-rows{padding:6px 0}
+.crow{
+  display:flex;align-items:center;gap:12px;
+  padding:11px 14px;
+}
+.crow + .crow{border-top:1px solid var(--divider);border-left:0}
+.crow + .crow{border-top-left-radius:0}
+.crow .c-id{display:flex;flex-direction:column;gap:3px;min-width:0}
+.crow .c-id .n{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:500}
+.crow .c-id .p{
+  font-size:11px;color:var(--text-2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.crow .right{margin-left:auto;flex:none}
+.select{
+  position:relative;
+  display:inline-flex;align-items:center;gap:5px;
+  height:24px;padding:0 8px;border-radius:7px;
+  border:1px solid var(--hairline);
+  background:var(--well);
+  font-size:12px;font-weight:500;font-variant-numeric:tabular-nums;
+  color:var(--text);
+}
+.select:hover{border-color:color-mix(in srgb,var(--t) 45%,var(--hairline))}
+.select .menu{left:auto}
+.bbtn{
+  display:inline-flex;align-items:center;gap:5px;
+  height:24px;padding:0 10px;border-radius:7px;
+  border:1px solid var(--hairline);background:var(--group);
+  font-size:12px;font-weight:500;color:var(--text);
+}
+.bbtn:hover{background:var(--well)}
+
+/* 披露行（终端环境 / 路径详情） */
+.drow{
+  display:flex;align-items:center;gap:10px;
+  padding:12px 14px;border-radius:8px;cursor:pointer;
+}
+.drow:hover{background:var(--well)}
+.drow .d-ic{
+  width:26px;height:26px;border-radius:7px;flex:none;
+  background:var(--well);color:var(--text-2);
+  display:flex;align-items:center;justify-content:center;
+}
+.drow .d-t{font-size:13px;font-weight:500}
+.drow .d-s{font-size:11px;color:var(--text-3);margin-top:1px}
+.drow .chev{margin-left:auto;color:var(--text-3);transition:transform .18s}
+.drow.open .chev{transform:rotate(90deg)}
+.acc{overflow:hidden;max-height:0;transition:max-height .22s ease}
+.acc.open{max-height:300px}
+.wellbox{
+  margin:0 14px 14px;padding:10px;
+  background:var(--well);border-radius:6px;
+  font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  color:var(--text-2);white-space:pre;line-height:1.7;
+  user-select:text;
+}
+.vrow{
+  display:flex;align-items:center;gap:10px;
+  padding:6px 2px;
+}
+.vrow .l{width:86px;flex:none;font-size:11px;color:var(--text-2)}
+.vrow .v{
+  font-size:11px;font-variant-numeric:tabular-nums;color:var(--text);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+
+/* toast */
+#toast{
+  position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(8px);
+  background:rgba(28,28,30,.94);color:#f5f5f7;
+  font-size:12px;padding:8px 14px;border-radius:9px;
+  opacity:0;pointer-events:none;transition:all .2s;z-index:99;
+}
+#toast.show{opacity:1;transform:translateX(-50%)}
+
+.env-anim{animation:envIn .2s ease}
+@keyframes envIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+@media (prefers-reduced-motion: reduce){
+  *{animation:none!important;transition:none!important}
+}
+</style>
+</head>
+<body>
+
+<div class="mockbar">
+  <span class="lbl">ENVPilot · 概览页重设计原型</span>
+  <div class="seg" id="variantSeg">
+    <button data-v="current">现状</button>
+    <button data-v="tiles" class="on">方案 A · 磁贴</button>
+    <button data-v="rows">方案 B · 行内</button>
+  </div>
+  <button id="themeBtn" title="切换深浅色">
+    <svg id="themeIc" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></svg>
+  </button>
+  <span class="hint">chip 可点 · Python 的 + 可模拟安装</span>
+</div>
+
+<div class="window">
+  <div class="titlebar">
+    <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+    <span class="spacer"></span>
+    <button class="winbtn" title="切换侧边栏" onclick="toast('演示窗口：侧边栏折叠不可用')">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><line x1="9.5" y1="4.5" x2="9.5" y2="19.5"/></svg>
+    </button>
+  </div>
+  <div class="window-body">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="logo">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="3"/><path d="M6.5 9l4 3.5L6.5 16"/><line x1="13" y1="16" x2="17.5" y2="16"/></svg>
+        </span>
+        <span>
+          <div class="name">ENVPilot</div>
+          <div class="sub">开发环境管理</div>
+        </span>
+      </div>
+      <nav class="nav">
+        <button class="on">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20.5 13.5A8.5 8.5 0 1 0 12 20.5"/><path d="M12 13.5L16 9"/></svg>
+          概览
+        </button>
+        <button onclick="toast('演示仅包含概览页')">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l8.5 4.5L12 12 3.5 7.5 12 3z"/><path d="M3.5 12.5L12 17l8.5-4.5"/><path d="M3.5 16.5L12 21l8.5-4.5"/></svg>
+          运行时
+        </button>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <div class="page">
+        <!-- 当前环境（随方案切换重渲染） -->
+        <section>
+          <div class="section-head"><h2>当前环境</h2><span class="hint">全局生效</span></div>
+          <div class="card"><div id="envBody"></div></div>
+        </section>
+
+        <!-- 终端环境 -->
+        <section>
+          <div class="card">
+            <div class="drow" id="termRow">
+              <span class="d-ic">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="3"/><path d="M6.5 9l4 3.5L6.5 16"/><line x1="13" y1="16" x2="17.5" y2="16"/></svg>
+              </span>
+              <span><div class="d-t">终端环境</div><div class="d-s" id="termSub">新开的终端会自动执行 2 条导出语句</div></span>
+              <button class="winbtn" id="copyBtn" title="复制" onclick="event.stopPropagation();copyScript()">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="8.5" y="8.5" width="12" height="12" rx="2.5"/><path d="M15.5 5.5A2 2 0 0 0 13.7 4H6a2 2 0 0 0-2 2v7.7a2 2 0 0 0 1.5 1.93"/></svg>
+              </button>
+              <span class="chev"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
+            </div>
+            <div class="acc" id="termAcc"><div class="wellbox" id="termBox"></div></div>
+          </div>
+          <div class="foot" style="padding:7px 2px 0;font-size:11px;color:var(--text-2)">版本变更只影响之后打开的终端。</div>
+        </section>
+
+        <!-- 路径详情 -->
+        <section>
+          <div class="card">
+            <div class="drow" id="pathRow">
+              <span class="d-ic">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3.5 6.5A2 2 0 0 1 5.5 4.5h4l2 2.5h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-10.5z"/></svg>
+              </span>
+              <span><div class="d-t">路径详情</div><div class="d-s">运行时目录与配置文件位置</div></span>
+              <span class="chev"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
+            </div>
+            <div class="acc" id="pathAcc">
+              <div style="padding:2px 14px 14px">
+                <div class="vrow" id="pvNode"><span class="l">Node 目录</span><span class="v"></span></div>
+                <div class="vrow" id="pvJava"><span class="l">JAVA_HOME</span><span class="v"></span></div>
+                <div class="vrow" id="pvPy"><span class="l">PYTHON_HOME</span><span class="v"></span></div>
+                <div style="height:1px;background:var(--divider);margin:7px 0"></div>
+                <div class="vrow"><span class="l">配置文件</span><span class="v">~/.envpilot/settings.json</span></div>
+                <div class="vrow"><span class="l">运行时目录</span><span class="v">~/.envpilot/runtimes</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="foot" style="padding:7px 2px 0;font-size:11px;color:var(--text-2)">复制路径，或在 Finder 中定位运行时目录。</div>
+        </section>
+      </div>
+    </main>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+/* ============================================================
+   演示数据（与截图中真实状态一致）
+   ============================================================ */
+const ICONS = {
+  box:  '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M21 8.2l-9-4.7-9 4.7v7.6l9 4.7 9-4.7V8.2z"/><path d="M3 8.2l9 4.7 9-4.7"/><path d="M12 12.9V21"/></svg>',
+  cup:  '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5h12v5.5a4.5 4.5 0 0 1-4.5 4.5h-3A4.5 4.5 0 0 1 4 15V9.5z"/><path d="M16 10.5h2a2.6 2.6 0 0 1 0 5.2h-2"/></svg>',
+  braces:'<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" font-family="ui-rounded,-apple-system,sans-serif" font-size="15" font-weight="700"><text x="12" y="16.5" text-anchor="middle">{ } </text></svg>',
+  check:'<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5l5 5 10-11"/></svg>',
+  plus: '<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 4v16M4 12h16"/></svg>',
+  dots: '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>',
+  chev:'<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+  tick: '<svg class="tick" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5l5 5 10-11"/></svg>',
+  down: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 4v12m0 0l-4.5-4.5M12 16l4.5-4.5"/></svg>',
+};
+
+const RUNTIMES = {
+  node: {
+    name:'Node.js', icon:'box', tint:'var(--tint-node)',
+    installed:['24.18.0','22.14.0','20.18.0','18.20.4'],
+    current:'24.18.0',
+    path:v => `~/.envpilot/runtimes/node/${v}`,
+  },
+  java: {
+    name:'JDK', icon:'cup', tint:'var(--tint-java)',
+    installed:['17.0.20.1','21.0.7'],
+    current:'17.0.20.1',
+    path:v => `~/.envpilot/runtimes/java/temurin-${v}+1/jdk/Contents/Home`,
+  },
+  python: {
+    name:'Python', icon:'braces', tint:'var(--tint-py)',
+    installed:[],
+    current:null,
+    path:v => `~/.envpilot/runtimes/python/${v}`,
+  },
+};
+const ORDER = ['node','java','python'];
+const MAX_CHIPS = 3;
+
+let variant = 'tiles';
+let lastSwitched = null;   // 记录刚切换的运行时，触发版本号动画
+let toastTimer = null;
+
+/* ---------------- 渲染 ---------------- */
+function chipsHtml(k){
+  const r = RUNTIMES[k];
+  if (r.installing){
+    return `<button class="chip spin" disabled>正在安装 3.13.3…</button>`;
+  }
+  if (!r.installed.length){
+    return `<button class="chip add" data-add="${k}" style="--t:${r.tint}">${ICONS.plus} 安装</button>`;
+  }
+  const shown = r.installed.slice(0, MAX_CHIPS);
+  const extra = r.installed.slice(MAX_CHIPS);
+  let h = shown.map(v =>
+    `<button class="chip${v===r.current?' sel':''}" data-k="${k}" data-v="${v}" style="--t:${r.tint}">${v}</button>`
+  ).join('');
+  if (extra.length){
+    h += `<span class="chip" data-more="${k}" style="--t:${r.tint}">${ICONS.dots}
+      <span class="menu">
+        ${extra.map(v =>
+          `<button class="menu-item${v===r.current?' sel':''}" data-k="${k}" data-v="${v}">${ICONS.tick}${v}</button>`
+        ).join('')}
+        <div class="menu-sep"></div>
+        <button class="menu-item mute" data-manage="${k}">管理 ${r.name} 版本…</button>
+      </span>
+    </span>`;
+  } else {
+    h += `<span class="chip" data-more="${k}" style="--t:${r.tint}">${ICONS.dots}
+      <span class="menu">
+        <button class="menu-item mute" data-manage="${k}">管理 ${r.name} 版本…</button>
+      </span>
+    </span>`;
+  }
+  return h;
+}
+
+function tile(k){
+  const r = RUNTIMES[k];
+  const active = !!r.current;
+  const swap = lastSwitched === k ? ' hero-swap' : '';
+  const hero = active
+    ? `<div class="t-hero${swap}">${r.current}</div>`
+    : `<div class="t-hero none">—</div>`;
+  const sub = active
+    ? `<div class="t-sub" title="${r.path(r.current)}">${ICONS.check} 当前使用 · <span style="overflow:hidden;text-overflow:ellipsis">${r.path(r.current)}</span></div>`
+    : `<div class="t-sub">尚未安装，安装后即可在此切换版本</div>`;
+  return `<div class="tile${active?'':' muted'}" style="--t:${r.tint}">
+    <div class="t-head">
+      <span class="badge s34${active?'':' muted'}" style="--t:${r.tint}">${ICONS[r.icon]}</span>
+      <span class="t-name">${r.name}</span>
+    </div>
+    ${hero}
+    ${sub}
+    <div class="chips" style="--t:${r.tint}">${chipsHtml(k)}</div>
+  </div>`;
+}
+
+function heroRow(k){
+  const r = RUNTIMES[k];
+  const active = !!r.current;
+  const swap = lastSwitched === k ? ' hero-swap' : '';
+  return `<div class="hrow" style="--t:${r.tint}">
+    <span class="badge s24${active?'':' muted'}" style="--t:${r.tint}">${ICONS[r.icon]}</span>
+    <div class="hv${active?'':' none'}${swap}">${active?r.current:'—'}</div>
+    <div class="h-id">
+      <span class="n">${r.name}${active?'':' <span class="pill neu">未安装</span>'}</span>
+      <span class="p" title="${active?r.path(r.current):''}">${active?r.path(r.current):'尚未安装，安装后即可使用'}</span>
+    </div>
+    <div class="chips" style="--t:${r.tint}">${chipsHtml(k)}</div>
+  </div>`;
+}
+
+function currentRow(k){
+  const r = RUNTIMES[k];
+  const active = !!r.current;
+  const right = r.installing
+    ? `<button class="bbtn" disabled>正在安装…</button>`
+    : active
+    ? `<span class="select" style="--t:${r.tint}">
+         <button class="menu-item" data-sel="${k}" style="all:unset">${r.current} ${ICONS.chev}</button>
+         <span class="menu" style="right:auto;left:-14px">
+           ${r.installed.map(v =>
+             `<button class="menu-item${v===r.current?' sel':''}" data-k="${k}" data-v="${v}">${ICONS.tick}${v}</button>`
+           ).join('')}
+           <div class="menu-sep"></div>
+           <button class="menu-item mute" data-manage="${k}">管理 ${r.name} 版本…</button>
+         </span>
+       </span>`
+    : `<button class="bbtn" data-add="${k}">${ICONS.down} 安装</button>`;
+  return `<div class="crow">
+    <span class="badge s30${active?'':' muted'}" style="--t:${r.tint}">${ICONS[r.icon]}</span>
+    <div class="c-id">
+      <span class="n">${r.name}</span>
+      <span class="p">${active ? r.path(r.current) : '尚未安装，安装后即可在此切换版本'}</span>
+    </div>
+    <span class="right">${right}</span>
+  </div>`;
+}
+
+function renderEnv(){
+  const el = document.getElementById('envBody');
+  el.className = variant === 'tiles' ? 'tiles' : (variant === 'rows' ? 'hero-rows' : 'cur-rows');
+  el.classList.add('env-anim');
+  el.innerHTML = ORDER.map(k =>
+    variant === 'tiles' ? tile(k) : variant === 'rows' ? heroRow(k) : currentRow(k)
+  ).join('');
+  setTimeout(() => el.classList.remove('env-anim'), 220);
+  refreshGlobals();
+  lastSwitched = null;
+}
+
+/* ---------------- 全局派生（终端脚本 / 路径） ---------------- */
+function refreshGlobals(){
+  const n = RUNTIMES.node, j = RUNTIMES.java, p = RUNTIMES.python;
+  const lines = [];
+  if (n.current) lines.push(`export PATH="$HOME${n.path(n.current).replace('~','')}/bin:$PATH"`);
+  if (j.current) lines.push(`export JAVA_HOME="$HOME${j.path(j.current).replace('~','')}"`);
+  if (p.current) lines.push(`export PATH="$HOME${p.path(p.current).replace('~','')}/bin:$PATH"`);
+  document.getElementById('termBox').textContent = lines.join('\n') || '# 当前没有需要导出的环境变量';
+  document.getElementById('termSub').textContent = lines.length
+    ? `新开的终端会自动执行 ${lines.length} 条导出语句` : '当前没有需要导出的环境变量';
+  document.getElementById('pvNode').querySelector('.v').textContent = n.current ? n.path(n.current) : '未选择';
+  document.getElementById('pvJava').querySelector('.v').textContent = j.current ? j.path(j.current) : '未选择';
+  document.getElementById('pvPy').querySelector('.v').textContent = p.current ? p.path(p.current) : '未选择';
+}
+
+/* ---------------- 交互 ---------------- */
+function closeMenus(root){
+  (root||document).querySelectorAll('.menu.open').forEach(m => m.classList.remove('open'));
+}
+
+document.addEventListener('click', e => {
+  const chip = e.target.closest('[data-k][data-v]');
+  const more = e.target.closest('[data-more]');
+  const sel = e.target.closest('[data-sel]');
+  const add = e.target.closest('[data-add]');
+  const mg  = e.target.closest('[data-manage]');
+
+  if (chip){
+    const r = RUNTIMES[chip.dataset.k];
+    if (r.current !== chip.dataset.v){
+      r.current = chip.dataset.v;
+      lastSwitched = chip.dataset.k;
+      closeMenus();
+      renderEnv();
+    }
+    return;
+  }
+  if (more){
+    e.stopPropagation();
+    const m = more.querySelector('.menu');
+    const was = m.classList.contains('open');
+    closeMenus();
+    if (!was) m.classList.add('open');
+    return;
+  }
+  if (sel){
+    e.stopPropagation();
+    const box = sel.closest('.select');
+    const m = box.querySelector('.menu');
+    const was = m.classList.contains('open');
+    closeMenus();
+    if (!was) m.classList.add('open');
+    return;
+  }
+  if (add){
+    const k = add.dataset.add;
+    const r = RUNTIMES[k];
+    if (!r.installed.length && !r.installing){
+      r.installing = true;
+      lastSwitched = k;
+      closeMenus();
+      renderEnv();
+      setTimeout(() => {
+        r.installing = false;
+        r.installed.push('3.13.3');
+        r.current = '3.13.3';
+        lastSwitched = k;
+        renderEnv();
+        toast('已安装 Python 3.13.3，并已设为当前使用');
+      }, 1400);
+    }
+    return;
+  }
+  if (mg){
+    closeMenus();
+    toast('打开「运行时」页管理版本（演示中不可用）');
+    return;
+  }
+  closeMenus();
+});
+
+/* 方案切换 */
+document.getElementById('variantSeg').addEventListener('click', e => {
+  const b = e.target.closest('button[data-v]');
+  if (!b) return;
+  document.querySelectorAll('#variantSeg button').forEach(x => x.classList.toggle('on', x === b));
+  variant = b.dataset.v;
+  lastSwitched = null;
+  renderEnv();
+});
+
+/* 深浅色 */
+function drawThemeIc(){
+  const dark = document.documentElement.dataset.theme === 'dark';
+  document.getElementById('themeIc').innerHTML = dark
+    ? '<circle cx="12" cy="12" r="4.4"/><path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5 5l1.7 1.7M17.3 17.3L19 19M19 5l-1.7 1.7M6.7 17.3L5 19"/>'
+    : '<path d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a7 7 0 0 0 11 11z"/>';
+}
+document.getElementById('themeBtn').addEventListener('click', () => {
+  const h = document.documentElement;
+  h.dataset.theme = h.dataset.theme === 'dark' ? 'light' : 'dark';
+  drawThemeIc();
+});
+drawThemeIc();
+
+/* 披露行 */
+function wireDisclosure(rowId, accId){
+  const row = document.getElementById(rowId);
+  const acc = document.getElementById(accId);
+  row.addEventListener('click', () => {
+    row.classList.toggle('open');
+    acc.classList.toggle('open');
+  });
+}
+wireDisclosure('termRow','termAcc');
+wireDisclosure('pathRow','pathAcc');
+
+function copyScript(){
+  const t = document.getElementById('termBox').textContent;
+  if (navigator.clipboard) navigator.clipboard.writeText(t).catch(()=>{});
+  toast(t.trim() ? '已复制终端导出语句' : '当前没有可复制的内容');
+}
+
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+renderEnv();
+</script>
+</body>
+</html>

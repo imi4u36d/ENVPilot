@@ -67,6 +67,7 @@ public struct ShellIntegrationService {
             lines.append("unset ENVPILOT_NODE_HOME")
             lines.append("echo \(ShellSyntax.singleQuoted("ENVPilot: 未找到 Node \(effectiveVersion)，请在 ENVPilot 中刷新运行时缓存。")) >&2")
         }
+        lines.append("export PATH=\"$HOME/.envpilot/tools:$PATH\"")
         if let effectiveJavaVersion, !effectiveJavaVersion.isEmpty {
             lines.append("export ENVPILOT_EFFECTIVE_JAVA_VERSION=\(ShellSyntax.singleQuoted(effectiveJavaVersion))")
         }

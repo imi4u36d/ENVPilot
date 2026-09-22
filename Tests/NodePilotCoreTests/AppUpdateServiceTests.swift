@@ -11,6 +11,9 @@ final class AppUpdateServiceTests: XCTestCase {
         XCTAssertEqual(AppVersion("0.6.5-beta.1")?.prerelease, ["beta", "1"])
         XCTAssertEqual(AppVersion("0.0.0-dev+abc1234")?.numbers, [0, 0, 0])
         XCTAssertEqual(AppVersion("0.0.0-dev+abc1234")?.prerelease, ["dev"])
+        XCTAssertEqual(AppVersion("7.0.6-6-g1d86792")?.numbers, [7, 0, 6])
+        XCTAssertEqual(AppVersion("7.0.6-6-g1d86792")?.prerelease, [])
+        XCTAssertEqual(AppVersion("7.0.6-6-g1d86792-dirty")?.prerelease, [])
         XCTAssertNil(AppVersion("dev"))
         XCTAssertNil(AppVersion(""))
     }
@@ -24,6 +27,10 @@ final class AppUpdateServiceTests: XCTestCase {
         // 正式版 > 预发布版。
         XCTAssertTrue(AppVersion("0.6.5")! > AppVersion("0.6.5-beta.1")!)
         XCTAssertTrue(AppVersion("0.6.5-beta.2")! > AppVersion("0.6.5-beta.1")!)
+        // git describe 后缀表示 tag 之后的提交，不是预发布版本。
+        XCTAssertEqual(AppVersion("7.0.6-6-g1d86792"), AppVersion("7.0.6"))
+        XCTAssertEqual(AppVersion("7.0.6-6-g1d86792-dirty"), AppVersion("7.0.6"))
+        XCTAssertTrue(AppVersion("7.0.7-1-gabc1234")! > AppVersion("7.0.6")!)
         // 开发构建的 0.0.0-dev 小于任何正式发布。
         XCTAssertTrue(AppVersion("0.0.0-dev+abc1234")! < AppVersion("0.1.0")!)
     }
