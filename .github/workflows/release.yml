@@ -1,7 +1,7 @@
 name: Release macOS app
 
 # 触发点：
-#   - 打 tag（v0.6.7）→ 测试 + 构建 + 签名 + DMG/ZIP + 建 Release（唯一自动触发路径）
+#   - 打 tag（v1.0.0）→ 测试 + 构建 + 签名 + DMG/ZIP + 建 Release（唯一自动触发路径）
 #   - 在网页上手动 Run workflow → 只出 artifact
 # 注意：push 到 main、开/更新 PR 都不会再触发本工作流。
 on:
@@ -127,9 +127,11 @@ jobs:
           ls -lh dist/ENVPilot.dmg dist/ENVPilot.zip
 
       # 发布说明里的签名状态直接读自打出来的包：ad-hoc 与真证书各写各的提醒。
+      # 正文后面会接上 CHANGELOG.md 里对应那一节，Release 页和仓库里的变更日志不会各写各的。
       - name: Write release notes
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          NUMERIC: ${{ steps.version.outputs.numeric }}
         run: |
           set -euo pipefail
           AUTH="$(codesign -dv dist/ENVPilot.app 2>&1 | awk -F'= ' '/Authority=/{print $2; exit}')"
@@ -158,6 +160,18 @@ jobs:
 
           \`ENVPilot.zip\` 是未经压缩的 app 包，供需要校验或自行签名的场景使用。
           NOTES
+
+          # 附上版本更新日志：从 CHANGELOG.md 抽出「## v<版本>」到下一个二级标题之间的内容。
+          # 抽不到就跳过（Release 正文只留安装说明），不要让缺一节变更日志把发布卡住。
+          if CHANGELOG_SECTION="$(awk -v ver="${NUMERIC}" '
+                index($0, "## v" ver) == 1 { found = 1; next }
+                found && index($0, "## ") == 1 { exit }
+                found { print }
+              ' CHANGELOG.md)" && [[ -n "${CHANGELOG_SECTION//[[:space:]]/}" ]]; then
+            printf '\n%s\n' "${CHANGELOG_SECTION}" >> dist/release-notes.md
+          else
+            echo "CHANGELOG.md 里没有 v${NUMERIC} 一节，Release 正文只含安装说明。" >&2
+          fi
           cat dist/release-notes.md
 
       - name: Upload build artifacts

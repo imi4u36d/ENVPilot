@@ -42,8 +42,8 @@ cp -R "$ROOT_DIR/Resources/zh-Hans.lproj" "$APP_BUNDLE/Contents/Resources/zh-Han
 chmod +x "$APP_BUNDLE/Contents/MacOS/ENVPilotApp"
 chmod +x "$APP_BUNDLE/Contents/Resources/bin/envpilot-helper"
 
-APP_VERSION="${APP_VERSION:-0.6.7}"
-APP_BUILD="${APP_BUILD:-9}"
+APP_VERSION="${APP_VERSION:-1.0.0}"
+APP_BUILD="${APP_BUILD:-10}"
 
 cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
