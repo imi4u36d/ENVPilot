@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 import ENVPilotCore
 import SwiftUI
@@ -846,3 +847,36 @@ enum LoginItemProbe {
         }
     }
 }
+
+#else
+
+// Release 构建下这些探针整体不存在：它们是开发期排查折叠卡顿、离线出图和验证设置入口
+// 用的工具，没有理由把上千行诊断代码、以及每次 body 求值都要跑一遍的环境变量检查
+// 带进发布包。需要它们时用调试构建（`swift build` / `swift run`）。
+
+import AppKit
+
+/// 发布构建下的空实现（见文件顶部说明）。
+@MainActor
+enum PerfProbe {
+    struct Settings {
+        var section: AppSection?
+    }
+
+    static var settings = Settings()
+    static var simpleSidebar: Bool { false }
+    static var simpleDetail: Bool { false }
+
+    static func load() {}
+    static func runIfRequested(store: NodeRuntimeStore) {}
+    static func noteBody(_ name: String) {}
+    static func noteFlatten() {}
+    static func trace(_ message: String) {}
+}
+
+@MainActor
+enum LoginItemProbe {
+    static func runIfRequested() {}
+}
+
+#endif

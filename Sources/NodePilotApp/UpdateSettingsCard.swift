@@ -27,7 +27,7 @@ struct UpdateSettingsCard: View {
                 if !model.canSelfUpdate, model.phase.isUpdateAvailable {
                     Text(model.installMode.manualReason ?? "当前运行位置不支持自动替换，将下载 dmg。")
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DesignColor.tertiaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -40,7 +40,7 @@ struct UpdateSettingsCard: View {
                         .toggleStyle(.switch)
                     Text(lastCheckedText)
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DesignColor.tertiaryText)
                 }
             }
         }
@@ -102,6 +102,10 @@ struct UpdateSettingsCard: View {
     // MARK: 状态
 
     private var statusMessage: String? {
+        // 取消说明优先：它是用户刚做的动作的回执，不能被下一轮状态覆盖掉。
+        if let cancelNotice = model.cancelNotice {
+            return cancelNotice
+        }
         switch model.phase {
         case .idle:
             return nil
@@ -131,7 +135,7 @@ struct UpdateSettingsCard: View {
                 ProgressView(value: fraction) {
                     Text(message)
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DesignColor.tertiaryText)
                 }
             } else {
                 HStack(spacing: 8) {
@@ -139,23 +143,21 @@ struct UpdateSettingsCard: View {
                         .controlSize(.small)
                     Text(message)
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DesignColor.tertiaryText)
                 }
             }
         }
     }
 
     private func notesWell(for release: AppRelease) -> some View {
-        ScrollView {
-            Text(ReleaseNotesFormatter.plainText(release.notes))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
-        }
-        .frame(maxHeight: 132)
-        .background(DesignColor.well, in: RoundedRectangle(cornerRadius: 6))
+        // 同上：去掉内层滚动区，变更日志跟着设置页一起滚。
+        Text(ReleaseNotesFormatter.plainText(release.notes))
+            .font(DesignType.caption)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+            .background(DesignColor.well, in: RoundedRectangle(cornerRadius: 6))
     }
 
     // MARK: 动作
@@ -164,6 +166,14 @@ struct UpdateSettingsCard: View {
     private var actionRow: some View {
         HStack(spacing: 10) {
             switch model.phase {
+            case .downloading:
+                if model.isCancellable {
+                    // 200MB 的包只靠「不等它」是取消不掉的：这里会真的中止传输。
+                    Button("取消下载") {
+                        model.cancelDownload()
+                    }
+                    .appButton(.secondary, size: .small)
+                }
             case .available(let release):
                 Button(model.canSelfUpdate ? "更新到 v\(release.version)" : "下载 ENVPilot \(release.version)") {
                     Task { await model.install() }

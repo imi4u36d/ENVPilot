@@ -9,13 +9,39 @@ protocol NodeRuntimeServicing: Sendable {
     func listAvailableJavaVersions(ltsOnly: Bool) throws -> [JavaDownloadCandidate]
     func listAvailablePythonVersions(stableOnly: Bool) throws -> [PythonDownloadCandidate]
     func setDefaultNode(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
-    func installNode(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
-    func uninstallNode(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
-    func installJava(featureVersion: Int, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
-    func uninstallJava(homePath: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
+    /// `cancellation` 一路传到 Core 的命令执行层：下载、解压、源码构建都能被杀掉，
+    /// `nil` 表示这次操作不可取消。
+    func installNode(
+        version: String,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeRuntimeSnapshot
+    func uninstallNode(
+        version: String,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeRuntimeSnapshot
+    func installJava(
+        featureVersion: Int,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeRuntimeSnapshot
+    func uninstallJava(
+        homePath: String,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeRuntimeSnapshot
     func setDefaultJava(version: String, homePath: String) throws -> NodeRuntimeSnapshot
-    func installPython(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
-    func uninstallPython(homePath: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot
+    func installPython(
+        version: String,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeRuntimeSnapshot
+    func uninstallPython(
+        homePath: String,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeRuntimeSnapshot
     func setDefaultPython(version: String, homePath: String) throws -> NodeRuntimeSnapshot
 }
 
@@ -52,35 +78,85 @@ struct LocalNodeRuntimeService: NodeRuntimeServicing {
         try environmentService.selectDefaultNode(version: version, progress: progress)
     }
 
-    func installNode(version: String, progress: (@Sendable (String) -> Void)? = nil) throws -> NodeRuntimeSnapshot {
-        try environmentService.installNode(version: version, progress: progress)
+    func installNode(
+        version: String,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)? = nil
+    ) throws -> NodeRuntimeSnapshot {
+        try environmentService.installNode(
+            version: version,
+            cancellation: cancellation,
+            progress: progress
+        )
     }
 
-    func uninstallNode(version: String, progress: (@Sendable (String) -> Void)? = nil) throws -> NodeRuntimeSnapshot {
-        try environmentService.uninstallNode(version: version, progress: progress)
+    func uninstallNode(
+        version: String,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)? = nil
+    ) throws -> NodeRuntimeSnapshot {
+        try throwIfCancelled(cancellation)
+        return try environmentService.uninstallNode(version: version, progress: progress)
     }
 
-    func installJava(featureVersion: Int, progress: (@Sendable (String) -> Void)? = nil) throws -> NodeRuntimeSnapshot {
-        try environmentService.installJava(featureVersion: featureVersion, progress: progress)
+    func installJava(
+        featureVersion: Int,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)? = nil
+    ) throws -> NodeRuntimeSnapshot {
+        try environmentService.installJava(
+            featureVersion: featureVersion,
+            cancellation: cancellation,
+            progress: progress
+        )
     }
 
-    func uninstallJava(homePath: String, progress: (@Sendable (String) -> Void)? = nil) throws -> NodeRuntimeSnapshot {
-        try environmentService.uninstallJava(homePath: homePath, progress: progress)
+    func uninstallJava(
+        homePath: String,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)? = nil
+    ) throws -> NodeRuntimeSnapshot {
+        try throwIfCancelled(cancellation)
+        return try environmentService.uninstallJava(homePath: homePath, progress: progress)
     }
 
     func setDefaultJava(version: String, homePath: String) throws -> NodeRuntimeSnapshot {
         try environmentService.selectDefaultJava(version: version, homePath: homePath)
     }
 
-    func installPython(version: String, progress: (@Sendable (String) -> Void)? = nil) throws -> NodeRuntimeSnapshot {
-        try environmentService.installPython(version: version, progress: progress)
+    func installPython(
+        version: String,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)? = nil
+    ) throws -> NodeRuntimeSnapshot {
+        try environmentService.installPython(
+            version: version,
+            cancellation: cancellation,
+            progress: progress
+        )
     }
 
-    func uninstallPython(homePath: String, progress: (@Sendable (String) -> Void)? = nil) throws -> NodeRuntimeSnapshot {
-        try environmentService.uninstallPython(homePath: homePath, progress: progress)
+    func uninstallPython(
+        homePath: String,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)? = nil
+    ) throws -> NodeRuntimeSnapshot {
+        try throwIfCancelled(cancellation)
+        return try environmentService.uninstallPython(homePath: homePath, progress: progress)
     }
 
     func setDefaultPython(version: String, homePath: String) throws -> NodeRuntimeSnapshot {
         try environmentService.selectDefaultPython(version: version, homePath: homePath)
+    }
+
+    /// 取消已经在调用前发生时就别再启动卸载。
+    ///
+    /// 安装路径（`installNode` / `installJava` / `installPython`）已经把令牌一路透传到
+    /// Core 的命令执行层；Core 的卸载入口还没有 `cancellation:` 参数，所以卸载目前只能
+    /// 覆盖「开始前已被取消」。等 Core 的卸载也接上令牌，这里换成透传即可。
+    private func throwIfCancelled(_ cancellation: ShellCommandCancellation?) throws {
+        if cancellation?.isCancelled == true {
+            throw CancellationError()
+        }
     }
 }

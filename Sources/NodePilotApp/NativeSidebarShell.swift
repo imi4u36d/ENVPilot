@@ -57,11 +57,17 @@ class SidebarToggleController: NSSplitViewController {
     /// 之后的才走动画。显式给出时长与 `allowsImplicitAnimation` 就没有这个问题。
     @objc func toggleSidebarAction(_ sender: Any?) {
         guard let item = splitViewItems.first else {
+#if DEBUG
             PerfProbe.trace("toggle: no split items")
+#endif
             return
         }
         let collapsed = !item.isCollapsed
+#if DEBUG
         PerfProbe.trace("toggle: items=\(splitViewItems.count) collapsed=\(item.isCollapsed) -> \(collapsed)")
+#endif
+        // 折叠状态要跨启动保留：以前关掉应用再打开，侧边栏总是重新展开。
+        UserDefaults.standard.set(collapsed, forKey: Self.collapsedStateKey)
         // 推迟到下一轮 runloop 再起动画。窗口刚被程序改过尺寸时，这一轮往往还在布局
         // 事务里，隐式动画会被吞掉（实测：改完尺寸紧接着点第一次，折叠会一步到位、
         // 没有动画）。提交掉挂起的布局再起动画就稳定了。
@@ -81,6 +87,10 @@ class SidebarToggleController: NSSplitViewController {
 
     /// 与系统侧边栏折叠动画相当的时长。
     static let collapseAnimationDuration: TimeInterval = 0.25
+    /// 折叠状态的持久化键。
+    static var collapsedStateKey: String { AppStateKey.sidebarCollapsed }
+    /// 侧边栏宽度是否已经写过设计值。只在第一次启动时套用设计宽度。
+    static var widthInitializedKey: String { AppStateKey.sidebarWidthInitialized }
 }
 
 @MainActor
@@ -90,6 +100,7 @@ final class SidebarSplitViewController<Sidebar: View, Detail: View>: SidebarTogg
     private let sidebarItem: NSSplitViewItem
     private let initialSidebarWidth: CGFloat
     private var didApplyInitialWidth = false
+    private var didRestoreCollapseState = false
     private let toolbarDelegate = SidebarToolbarDelegate()
     private var toolbarIdentifier: NSToolbar.Identifier { "ENVPilotMainToolbar" }
 
@@ -140,16 +151,38 @@ final class SidebarSplitViewController<Sidebar: View, Detail: View>: SidebarTogg
 
     override func viewDidAppear() {
         super.viewDidAppear()
+        restorePersistedCollapseStateIfNeeded()
         applyInitialSidebarWidthIfNeeded()
         installToolbarIfNeeded()
     }
 
-    /// 首次布局时把侧边栏定到设计宽度。只做一次，之后用户拖到哪就是哪。
+    /// 恢复上次退出时的折叠状态。
+    private func restorePersistedCollapseStateIfNeeded() {
+        guard !didRestoreCollapseState else {
+            return
+        }
+        didRestoreCollapseState = true
+        guard UserDefaults.standard.object(forKey: SidebarToggleController.collapsedStateKey) != nil else {
+            return
+        }
+        sidebarItem.isCollapsed = UserDefaults.standard.bool(forKey: SidebarToggleController.collapsedStateKey)
+    }
+
+    /// 首次布局时把侧边栏定到设计宽度。
+    ///
+    /// 以前每次启动都无条件 `setPosition`：既覆盖掉 AppKit 可能已经恢复的宽度，也从来没设
+    /// `autosaveName`，于是用户拖出来的宽度活不过一次重启。现在交给 autosave，只有从来没
+    /// 初始化过（本机第一次启动）才套用设计值。
     private func applyInitialSidebarWidthIfNeeded() {
         guard !didApplyInitialWidth, splitView.subviews.count >= 2 else {
             return
         }
         didApplyInitialWidth = true
+        splitView.autosaveName = "ENVPilotMainSplit"
+        guard !UserDefaults.standard.bool(forKey: SidebarToggleController.widthInitializedKey) else {
+            return
+        }
+        UserDefaults.standard.set(true, forKey: SidebarToggleController.widthInitializedKey)
         splitView.setPosition(initialSidebarWidth, ofDividerAt: 0)
     }
 

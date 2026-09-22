@@ -35,6 +35,9 @@ enum MenuBarIcon {
             return true
         }
         image.isTemplate = true
+        // 菜单栏图标是这个 App 在 VoiceOver 里唯一的入口：不设描述的话，状态项只会
+        // 被读成「图像」，用户既不知道它是谁、也不知道点开有什么。
+        image.accessibilityDescription = "ENVPilot"
         return image
     }
 }

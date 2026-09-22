@@ -256,6 +256,8 @@ public struct LocalAIEnvironmentService: AIEnvironmentServicing, Sendable {
     private let latestVersionProvider: any AIEnvironmentLatestVersionProviding
     private let settingsStore: any AppSettingsStoring
     private let environment: [String: String]
+    /// 单次操作内的可执行文件路径缓存，见 `DetectionCache`。
+    private let detection = DetectionCache()
 
     public init(
         shellRunner: any ShellCommandRunning = ShellCommandRunner(),
@@ -308,6 +310,8 @@ public struct LocalAIEnvironmentService: AIEnvironmentServicing, Sendable {
         let plan = Self.installPlan(for: kind, packageManager: packageManager)
 
         progress?(.installing)
+        // 同一次操作里相同阶段只上报一次：npm/pnpm 安装会刷出成百上千行同类输出。
+        let stages = StageDeduplicator()
         let result = try shellRunner.runShell(
             """
             \(commandPreamble(
@@ -322,7 +326,7 @@ public struct LocalAIEnvironmentService: AIEnvironmentServicing, Sendable {
                 guard let stage = Self.updateStage(from: output) else {
                     return
                 }
-                progress?(stage)
+                stages.forward(stage, to: progress)
             }
         )
         if cancellation?.isCancelled == true {
@@ -336,6 +340,8 @@ public struct LocalAIEnvironmentService: AIEnvironmentServicing, Sendable {
         }
 
         progress?(.verifying)
+        // 安装/切换可能把可执行文件搬到新目录，路径表必须重算。
+        detection.invalidate()
         return await status(for: kind)
     }
 
@@ -358,6 +364,8 @@ public struct LocalAIEnvironmentService: AIEnvironmentServicing, Sendable {
         let plan = Self.installPlan(for: kind, packageManager: packageManager)
 
         progress?(.installing)
+        // 同一次操作里相同阶段只上报一次：npm/pnpm 安装会刷出成百上千行同类输出。
+        let stages = StageDeduplicator()
         let result = try shellRunner.runShell(
             """
             \(commandPreamble(
@@ -372,7 +380,7 @@ public struct LocalAIEnvironmentService: AIEnvironmentServicing, Sendable {
                 guard let stage = Self.updateStage(from: output) else {
                     return
                 }
-                progress?(stage)
+                stages.forward(stage, to: progress)
             }
         )
         if cancellation?.isCancelled == true {
@@ -386,6 +394,8 @@ public struct LocalAIEnvironmentService: AIEnvironmentServicing, Sendable {
         }
 
         progress?(.verifying)
+        // 安装/切换可能把可执行文件搬到新目录，路径表必须重算。
+        detection.invalidate()
         return await status(for: kind)
     }
 
@@ -403,6 +413,8 @@ public struct LocalAIEnvironmentService: AIEnvironmentServicing, Sendable {
         progress?(.fetchingPackage)
         let plan = Self.updatePlan(for: current, brewExecutable: brewExecutablePath)
         progress?(.installing)
+        // 同一次操作里相同阶段只上报一次：npm/pnpm 安装会刷出成百上千行同类输出。
+        let stages = StageDeduplicator()
         let result = try shellRunner.runShell(
             "\(commandPreamble(for: current.executablePath ?? kind.executableName))\nexec \(plan.command)",
             environment: environment,
@@ -411,7 +423,7 @@ public struct LocalAIEnvironmentService: AIEnvironmentServicing, Sendable {
                 guard let stage = Self.updateStage(from: output) else {
                     return
                 }
-                progress?(stage)
+                stages.forward(stage, to: progress)
             }
         )
         if cancellation?.isCancelled == true {
@@ -424,6 +436,8 @@ public struct LocalAIEnvironmentService: AIEnvironmentServicing, Sendable {
             throw AIEnvironmentServiceError.updateFailed(command: plan.displayCommand, output: output)
         }
         progress?(.verifying)
+        // 安装/切换可能把可执行文件搬到新目录，路径表必须重算。
+        detection.invalidate()
         return await status(for: kind)
     }
 
@@ -431,6 +445,65 @@ public struct LocalAIEnvironmentService: AIEnvironmentServicing, Sendable {
 
     func status(for kind: AIEnvironmentKind) async -> AIEnvironmentStatus {
         await status(for: kind, executablePath: resolveExecutablePaths()[kind])
+    }
+
+    /// 阶段去重器：`@Sendable` 闭包要能被后台线程调用，所以用锁保护。
+    final class StageDeduplicator: @unchecked Sendable {
+        private let lock = NSLock()
+        private var last: AIEnvironmentUpdateStage?
+
+        func forward(
+            _ stage: AIEnvironmentUpdateStage,
+            to progress: (@Sendable (AIEnvironmentUpdateStage) -> Void)?
+        ) {
+            guard let progress else {
+                return
+            }
+            lock.lock()
+            let isDuplicate = last == stage
+            last = stage
+            lock.unlock()
+            guard !isDuplicate else {
+                return
+            }
+            progress(stage)
+        }
+    }
+
+    // MARK: 路径缓存
+
+    /// `@unchecked Sendable` + 锁：`resolveExecutablePaths()` 会被 `withTaskGroup` 里的
+    /// 并发任务调用，缓存必须是线程安全的。
+    final class DetectionCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var paths: [AIEnvironmentKind: String]?
+
+        func executablePaths(_ compute: () -> [AIEnvironmentKind: String]) -> [AIEnvironmentKind: String] {
+            lock.lock()
+            if let paths {
+                lock.unlock()
+                return paths
+            }
+            lock.unlock()
+
+            let computed = compute()
+
+            lock.lock()
+            if let paths {
+                lock.unlock()
+                return paths
+            }
+            paths = computed
+            lock.unlock()
+            return computed
+        }
+
+        /// 安装/切换/更新会改变可执行文件的位置，之后必须重算。
+        func invalidate() {
+            lock.lock()
+            paths = nil
+            lock.unlock()
+        }
     }
 
     private func status(
@@ -468,7 +541,16 @@ public struct LocalAIEnvironmentService: AIEnvironmentServicing, Sendable {
         )
     }
 
+    /// 解析四个 AI 工具的可执行文件路径。
+    ///
+    /// 这一步要跑一次 `zsh -lc` + `command -v` 循环、读一次 settings.json、再扫一遍目录。
+    /// install/update/switchToEnvPilot 每条路径都会先查一次当前状态、完成后又查一次，
+    /// 于是同一次用户操作里这套扫描要跑两遍。改成按操作缓存：命令执行完再失效。
     private func resolveExecutablePaths() -> [AIEnvironmentKind: String] {
+        detection.executablePaths { computeExecutablePaths() }
+    }
+
+    private func computeExecutablePaths() -> [AIEnvironmentKind: String] {
         let selectedNodePath = try? settingsStore.load().selectedNodePath
         let preferredDirectories = preferredNodeBinDirectories(selectedNodePath: selectedNodePath)
         var paths: [AIEnvironmentKind: String] = [:]

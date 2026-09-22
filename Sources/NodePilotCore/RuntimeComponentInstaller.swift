@@ -3,14 +3,50 @@ import CryptoKit
 
 public protocol RuntimeComponentInstalling: Sendable {
     func listAvailableNodeVersions(ltsOnly: Bool) throws -> [NodeDownloadCandidate]
-    func installNode(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeInstallation
+    func installNode(
+        version: String,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeInstallation
     func uninstallManagedNode(installation: NodeInstallation) throws
     func listAvailableJavaVersions(ltsOnly: Bool) throws -> [JavaDownloadCandidate]
-    func installJava(featureVersion: Int, progress: (@Sendable (String) -> Void)?) throws -> JavaInstallation
+    func installJava(
+        featureVersion: Int,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> JavaInstallation
     func uninstallManagedJava(homePath: String) throws
     func listAvailablePythonVersions(stableOnly: Bool) throws -> [PythonDownloadCandidate]
-    func installPython(version: String, progress: (@Sendable (String) -> Void)?) throws -> PythonInstallation
+    func installPython(
+        version: String,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> PythonInstallation
     func uninstallManagedPython(homePath: String) throws
+}
+
+public extension RuntimeComponentInstalling {
+    /// 兼容不带取消令牌的旧调用点（协议要求本身没法写默认值）。
+    func installNode(
+        version: String,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeInstallation {
+        try installNode(version: version, cancellation: nil, progress: progress)
+    }
+
+    func installJava(
+        featureVersion: Int,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> JavaInstallation {
+        try installJava(featureVersion: featureVersion, cancellation: nil, progress: progress)
+    }
+
+    func installPython(
+        version: String,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> PythonInstallation {
+        try installPython(version: version, cancellation: nil, progress: progress)
+    }
 }
 
 public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
@@ -35,7 +71,13 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
         }
     }
 
-    public func installNode(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeInstallation {
+    public func installNode(
+        version: String,
+        cancellation: ShellCommandCancellation? = nil,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeInstallation {
+        try throwIfCancelled(cancellation)
+        sweepStaleInstallArtifacts()
         let resolvedVersion = try resolveNodeVersion(version)
         let archiveName = "node-v\(resolvedVersion)-\(Self.nodeArchiveFileToken).tar.xz"
         let baseURL = "https://nodejs.org/dist/v\(resolvedVersion)"
@@ -50,14 +92,17 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
             from: archiveURL,
             to: archiveURLOnDisk,
             label: "正在下载 Node \(resolvedVersion)",
-            progress: progress
+            progress: progress,
+            cancellation: cancellation
         )
 
+        try throwIfCancelled(cancellation)
         progress?("正在安装 Node \(resolvedVersion)：校验 70%")
         let checksumText = try fetchString(from: checksumURL)
         let expectedChecksum = try checksum(named: archiveName, in: checksumText)
         try verifySHA256(fileURL: archiveURLOnDisk, expectedHex: expectedChecksum)
 
+        try throwIfCancelled(cancellation)
         progress?("正在安装 Node \(resolvedVersion)：解压 85%")
         let extractDirectory = workDirectory.appendingPathComponent("extract", isDirectory: true)
         try FileManager.default.createDirectory(at: extractDirectory, withIntermediateDirectories: true)
@@ -96,12 +141,23 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
             ? releases.availableLTSReleases.sorted(by: >)
             : Array(Set(releases.availableLTSReleases + [releases.mostRecentFeatureRelease]))
             .sorted(by: >)
-        return try featureVersions.compactMap { featureVersion in
-            try latestJavaCandidate(featureVersion: featureVersion)
-        }
+        // 每个 feature version 都要打一次 Adoptium（未命中再补一次 Zulu），而列表必须等
+        // 全部返回才能渲染：以前这里是串行的，十几个版本就是十几个网络往返。
+        // 现在并发但保序（最多 4 个在飞），结果顺序与 `featureVersions` 完全一致。
+        return try Self.assembledCandidates(
+            from: Self.concurrentMap(featureVersions, maxInFlight: 4) { featureVersion in
+                try self.latestJavaCandidate(featureVersion: featureVersion)
+            }
+        )
     }
 
-    public func installJava(featureVersion: Int, progress: (@Sendable (String) -> Void)?) throws -> JavaInstallation {
+    public func installJava(
+        featureVersion: Int,
+        cancellation: ShellCommandCancellation? = nil,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> JavaInstallation {
+        try throwIfCancelled(cancellation)
+        sweepStaleInstallArtifacts()
         guard featureVersion > 0 else {
             throw RuntimeComponentInstallerError.invalidJavaFeatureVersion(String(featureVersion))
         }
@@ -120,14 +176,17 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
             from: archiveURL,
             to: archiveURLOnDisk,
             label: "正在下载 \(candidate.vendor) JDK \(candidate.version)",
-            progress: progress
+            progress: progress,
+            cancellation: cancellation
         )
 
+        try throwIfCancelled(cancellation)
         if let checksum = candidate.checksum, !checksum.isEmpty {
             progress?("正在安装 \(candidate.vendor) JDK \(candidate.version)：校验 70%")
             try verifySHA256(fileURL: archiveURLOnDisk, expectedHex: checksum)
         }
 
+        try throwIfCancelled(cancellation)
         progress?("正在安装 \(candidate.vendor) JDK \(candidate.version)：解压 85%")
         let extractDirectory = workDirectory.appendingPathComponent("extract", isDirectory: true)
         try FileManager.default.createDirectory(at: extractDirectory, withIntermediateDirectories: true)
@@ -219,12 +278,23 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
             release.isSupportedOnModernMac && (!stableOnly || release.isStable)
         }
         let latestReleases = latestPythonReleasePerFeature(from: releases)
-        return try latestReleases.compactMap { release in
-            try pythonSourceCandidate(version: release.version)
-        }
+        // 以前每个 release 都要抓一遍 python.org 的目录 HTML（只为了 `contains(archiveName)`），
+        // 十几个版本就是十几次串行下载。现在 URL 直接按目录布局拼出来，用一次 HEAD 确认，
+        // 并且并发探测（最多 4 个在飞），顺序仍与 `latestReleases` 一致。
+        return try Self.assembledCandidates(
+            from: Self.concurrentMap(latestReleases.map(\.version), maxInFlight: 4) { version in
+                try self.pythonSourceCandidate(version: version)
+            }
+        )
     }
 
-    public func installPython(version: String, progress: (@Sendable (String) -> Void)?) throws -> PythonInstallation {
+    public func installPython(
+        version: String,
+        cancellation: ShellCommandCancellation? = nil,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> PythonInstallation {
+        try throwIfCancelled(cancellation)
+        sweepStaleInstallArtifacts()
         let resolvedVersion = try resolvePythonVersion(version)
         let candidate = try pythonSourceCandidate(version: resolvedVersion)
         guard let candidate else {
@@ -241,9 +311,20 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
             from: archiveURL,
             to: archiveURLOnDisk,
             label: "正在下载 Python \(resolvedVersion)",
+            progress: progress,
+            cancellation: cancellation
+        )
+
+        try throwIfCancelled(cancellation)
+        progress?("正在安装 Python \(resolvedVersion)：校验 50%")
+        try verifyPythonArchive(
+            archiveURLOnDisk,
+            archiveName: candidate.packageName,
+            version: resolvedVersion,
             progress: progress
         )
 
+        try throwIfCancelled(cancellation)
         progress?("正在安装 Python \(resolvedVersion)：解压 55%")
         let extractDirectory = workDirectory.appendingPathComponent("extract", isDirectory: true)
         try FileManager.default.createDirectory(at: extractDirectory, withIntermediateDirectories: true)
@@ -262,19 +343,22 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
         progress?("正在安装 Python \(resolvedVersion)：配置 65%")
         try runPythonBuildCommand(
             "cd \(ShellSyntax.singleQuoted(sourceDirectory.path)) && ./configure --prefix=\(ShellSyntax.singleQuoted(target.path)) --enable-shared",
-            stage: "配置 Python \(resolvedVersion)"
+            stage: "配置 Python \(resolvedVersion)",
+            cancellation: cancellation
         )
 
         progress?("正在安装 Python \(resolvedVersion)：编译 75%")
         try runPythonBuildCommand(
             "cd \(ShellSyntax.singleQuoted(sourceDirectory.path)) && /usr/bin/make -j\(Self.processorCount)",
-            stage: "编译 Python \(resolvedVersion)"
+            stage: "编译 Python \(resolvedVersion)",
+            cancellation: cancellation
         )
 
         progress?("正在安装 Python \(resolvedVersion)：写入 95%")
         try runPythonBuildCommand(
             "cd \(ShellSyntax.singleQuoted(sourceDirectory.path)) && /usr/bin/make install DESTDIR=\(ShellSyntax.singleQuoted(stagingRoot.path))",
-            stage: "安装 Python \(resolvedVersion)"
+            stage: "安装 Python \(resolvedVersion)",
+            cancellation: cancellation
         )
 
         guard FileManager.default.isExecutableFile(atPath: stagingTarget.appendingPathComponent("bin/python3").path) else {
@@ -483,24 +567,163 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
         return latestReleases
     }
 
-    func pythonSourceCandidate(version: String) throws -> PythonDownloadCandidate? {
+    /// 由 python.org 稳定的目录布局直接构造源码归档候选。
+    ///
+    /// 以前无论列表还是安装，都要先把该版本的目录 HTML 抓下来、`contains` 一下才知道归档
+    /// 存在：列 10 个版本就是 10 次串行 HTML 下载。现在直接拼
+    /// `https://www.python.org/ftp/python/<version>/Python-<version>.tar.xz`，只用一次
+    /// HEAD 确认；确认不了（404、HEAD 不被支持、网络异常）才回退到原来的 HTML 探测。
+    func pythonSourceCandidate(
+        version: String,
+        confirmExistence: Bool = true
+    ) throws -> PythonDownloadCandidate? {
         let baseURL = "https://www.python.org/ftp/python/\(version)"
         let archiveName = "Python-\(version).tar.xz"
-        let html = try fetchString(from: Self.url("\(baseURL)/"))
-        guard html.contains(archiveName) else {
-            return nil
+        let archiveURL = "\(baseURL)/\(archiveName)"
+
+        if confirmExistence, try !confirmsRemoteFile(at: Self.url(archiveURL)) {
+            // 老版本目录里可能只有 .tgz，或者某个镜像不支持 HEAD，回退到目录探测。
+            let html = try fetchString(from: Self.url("\(baseURL)/"))
+            guard html.contains(archiveName) else {
+                return nil
+            }
         }
         return PythonDownloadCandidate(
             version: version,
             packageName: archiveName,
-            downloadURL: "\(baseURL)/\(archiveName)"
+            downloadURL: archiveURL
         )
     }
 
-    func runPythonBuildCommand(_ command: String, stage: String) throws {
-        let result = try shellRunner.runShell(command, environment: environment)
+    /// HEAD 请求确认远端文件存在。网络错误、非 2xx 一律返回 false，由调用方决定回退策略。
+    func confirmsRemoteFile(at url: URL) throws -> Bool {
+        let semaphore = DispatchSemaphore(value: 0)
+        let state = RuntimeDownloadState<Bool>()
+        var request = URLRequest(url: url, timeoutInterval: 30)
+        request.httpMethod = "HEAD"
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            let exists = error == nil
+                && (response as? HTTPURLResponse).map { (200...299).contains($0.statusCode) } == true
+            state.complete(.success(exists))
+            semaphore.signal()
+        }.resume()
+        semaphore.wait()
+        return (try? state.result().get()) ?? false
+    }
+
+    /// 校验 Python 源码归档。
+    ///
+    /// python.org 的 ftp 目录里现在**没有** `<archive>.md5` 了（只留 `.asc`/`.sig` 签名），
+    /// 所以先试归档旁的 `.md5`（老版本有），再退到官网下载 API 里的 `md5_sum`；
+    /// 两条路都拿不到时至少把「未校验」显示出来，不让用户误以为这个归档验过。
+    func verifyPythonArchive(
+        _ fileURL: URL,
+        archiveName: String,
+        version: String,
+        progress: (@Sendable (String) -> Void)?
+    ) throws {
+        guard let expected = pythonArchiveMD5(archiveName: archiveName, version: version) else {
+            progress?("正在安装 Python：未校验（无法获取官方 md5）")
+            return
+        }
+        try verifyMD5(fileURL: fileURL, expectedHex: expected)
+    }
+
+    /// 依次尝试 `<archive>.md5` 与官网 API，返回第一个可用的 MD5。
+    func pythonArchiveMD5(archiveName: String, version: String) -> String? {
+        let baseURL = "https://www.python.org/ftp/python/\(version)"
+        if let text = try? fetchString(from: Self.url("\(baseURL)/\(archiveName).md5")),
+           let digest = Self.md5HexDigest(in: text) {
+            return digest
+        }
+        return apiArchiveMD5(archiveName: archiveName, version: version)
+    }
+
+    /// 官网下载 API：`downloads/release/?name=Python <version>` 拿数字 id，
+    /// 再列该 release 的全部文件，按归档名取 `md5_sum`。
+    private func apiArchiveMD5(archiveName: String, version: String) -> String? {
+        var releaseComponents = URLComponents(
+            string: "https://www.python.org/api/v2/downloads/release/"
+        )
+        releaseComponents?.queryItems = [URLQueryItem(name: "name", value: "Python \(version)")]
+        guard let releaseListURL = releaseComponents?.url,
+              let releases = try? fetchJSON(releaseListURL, as: [PythonApiRelease].self),
+              let releaseID = releases.first?.resourceURI
+                  .split(separator: "/")
+                  .last
+                  .flatMap({ Int($0) }) else {
+            return nil
+        }
+
+        var fileComponents = URLComponents(
+            string: "https://www.python.org/api/v2/downloads/release_file/"
+        )
+        fileComponents?.queryItems = [URLQueryItem(name: "release", value: String(releaseID))]
+        guard let fileListURL = fileComponents?.url,
+              let files = try? fetchJSON(fileListURL, as: [PythonReleaseFile].self) else {
+            return nil
+        }
+        return Self.md5Digest(in: files, archiveName: archiveName)
+    }
+
+    /// 在 API 返回的文件列表里找与归档同名的条目，取它的 MD5。
+    static func md5Digest(in releaseFiles: [PythonReleaseFile], archiveName: String) -> String? {
+        releaseFiles.first {
+            $0.url.hasSuffix("/\(archiveName)") && !$0.md5Sum.isEmpty
+        }?.md5Sum
+    }
+
+    /// `.md5` 文件里可能只有一行 32 位十六进制摘要，也可能是 `摘要  文件名`，取第一个匹配。
+    static func md5HexDigest(in text: String) -> String? {
+        let pattern = #"[0-9a-fA-F]{32}"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(
+                  in: text,
+                  range: NSRange(text.startIndex..<text.endIndex, in: text)
+              ),
+              let range = Range(match.range, in: text) else {
+            return nil
+        }
+        return String(text[range])
+    }
+
+    func verifyMD5(fileURL: URL, expectedHex: String) throws {
+        let fileHandle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? fileHandle.close() }
+
+        var hasher = Insecure.MD5()
+        while let data = try fileHandle.read(upToCount: 1_048_576), !data.isEmpty {
+            hasher.update(data: data)
+        }
+        let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        guard digest.lowercased() == expectedHex.lowercased() else {
+            throw RuntimeComponentInstallerError.runtimeChecksumMismatch(file: fileURL.lastPathComponent)
+        }
+    }
+
+    func runPythonBuildCommand(
+        _ command: String,
+        stage: String,
+        cancellation: ShellCommandCancellation? = nil
+    ) throws {
+        // 源码构建是本 App 最长的操作：configure + make + make install 可能十几分钟，
+        // 所以显式用长任务上限，而不是默认的 30 分钟。
+        let result = try shellRunner.runShell(
+            command,
+            environment: environment,
+            cancellation: cancellation,
+            timeout: ShellCommandRunner.longRunningTimeout,
+            onOutput: nil
+        )
         guard result.succeeded else {
             throw RuntimeComponentInstallerError.runtimeArchiveInvalid(message: "\(stage) failed: \(preferErrorOutput(result))")
+        }
+    }
+
+    /// 耗时步骤之间检查取消：用户点了取消，不该还要等下载/解压/构建整个跑完。
+    func throwIfCancelled(_ cancellation: ShellCommandCancellation?) throws {
+        if cancellation?.isCancelled == true {
+            throw CancellationError()
         }
     }
 
@@ -559,8 +782,10 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
         from url: URL,
         to destination: URL,
         label: String,
-        progress: (@Sendable (String) -> Void)?
+        progress: (@Sendable (String) -> Void)?,
+        cancellation: ShellCommandCancellation? = nil
     ) throws {
+        try throwIfCancelled(cancellation)
         let semaphore = DispatchSemaphore(value: 0)
         let state = RuntimeDownloadState<Void>()
         let delegate = RuntimeFileDownloadDelegate(
@@ -568,7 +793,8 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
             destination: destination,
             label: label,
             progress: progress,
-            state: state
+            state: state,
+            cancellation: cancellation
         ) {
             semaphore.signal()
         }
@@ -582,6 +808,117 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
         semaphore.wait()
         session.finishTasksAndInvalidate()
         return try state.result().get()
+    }
+
+    /// 并发但保序的映射，最多 `maxInFlight` 个任务同时在飞。
+    ///
+    /// `fetchJSON`/`fetchString` 内部是「信号量等 URLSession 回调」的同步阻塞写法，
+    /// 没法直接 await，所以这里用全局队列上的真实线程并发，而不是 TaskGroup。
+    /// 返回数组与输入一一对应，调用方可以按原顺序筛掉 nil。
+    static func concurrentMap<T: Sendable, U: Sendable>(
+        _ values: [T],
+        maxInFlight: Int = 4,
+        _ transform: @escaping @Sendable (T) throws -> U
+    ) -> [Result<U, Error>] {
+        guard !values.isEmpty else {
+            return []
+        }
+        let results = ConcurrentResultBox<U>(count: values.count)
+        let cursor = ConcurrentIndexCursor()
+        let group = DispatchGroup()
+        let workers = min(max(1, maxInFlight), values.count)
+        for _ in 0..<workers {
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                while let index = cursor.next(limit: values.count) {
+                    results.store(Result { try transform(values[index]) }, at: index)
+                }
+                group.leave()
+            }
+        }
+        group.wait()
+        return (0..<values.count).map { results.value(at: $0) }
+    }
+
+    /// 保序收集探测结果：跳过「查到了但没有候选」，全部失败时把第一个错误抛出去，
+    /// 这样列表页既能看到部分结果，也不会把「网络挂了」显示成「没有可用版本」。
+    static func assembledCandidates<U>(from results: [Result<U?, Error>]) throws -> [U] {
+        var candidates: [U] = []
+        var firstFailure: Error?
+        for result in results {
+            switch result {
+            case .success(let candidate):
+                if let candidate {
+                    candidates.append(candidate)
+                }
+            case .failure(let error):
+                if firstFailure == nil {
+                    firstFailure = error
+                }
+            }
+        }
+        if candidates.isEmpty, let firstFailure, !results.isEmpty {
+            throw firstFailure
+        }
+        return candidates
+    }
+
+    /// 安装开始前清理上次运行残留的临时/备份目录。
+    ///
+    /// 安装成功时工作目录和备份目录都会被删掉，但硬杀（强退、断电、取消后进程树没清
+    /// 干净）会留下 `envpilot-runtime-*` 临时目录和 `.<name>.backup-<uuid>` 备份目录，
+    /// 越攒越多。只清理超过 24 小时的，不会误删另一个正在进行的安装。
+    func sweepStaleInstallArtifacts(
+        in roots: [URL] = RuntimeComponentInstaller.managedRuntimeRoots,
+        tempDirectory: URL = FileManager.default.temporaryDirectory,
+        now: Date = Date(),
+        staleAfter: TimeInterval = 24 * 60 * 60
+    ) {
+        let fileManager = FileManager.default
+        let threshold = now.addingTimeInterval(-staleAfter)
+
+        for root in roots {
+            guard let entries = try? fileManager.contentsOfDirectory(
+                at: root,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: []
+            ) else {
+                continue
+            }
+            for entry in entries {
+                let name = entry.lastPathComponent
+                guard name.hasPrefix("."), name.contains(".backup-") else {
+                    continue
+                }
+                guard Self.isStale(entry, before: threshold, fileManager: fileManager) else {
+                    continue
+                }
+                try? fileManager.removeItem(at: entry)
+            }
+        }
+
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: tempDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: []
+        ) else {
+            return
+        }
+        for entry in entries where entry.lastPathComponent.hasPrefix("envpilot-runtime-") {
+            guard Self.isStale(entry, before: threshold, fileManager: fileManager) else {
+                continue
+            }
+            try? fileManager.removeItem(at: entry)
+        }
+    }
+
+    private static func isStale(_ url: URL, before threshold: Date, fileManager: FileManager) -> Bool {
+        guard let modified = try? url
+            .resourceValues(forKeys: [.contentModificationDateKey])
+            .contentModificationDate else {
+            return false
+        }
+        return modified < threshold
     }
 
     static func validateDownloadedData(
@@ -822,6 +1159,11 @@ public struct RuntimeComponentInstaller: RuntimeComponentInstalling, Sendable {
             .appendingPathComponent(".envpilot/runtimes/python", isDirectory: true)
     }
 
+    /// 三个受管运行时目录：残留备份目录的清扫范围。
+    static var managedRuntimeRoots: [URL] {
+        [managedNodeRoot(), managedJavaRoot(), managedPythonRoot()]
+    }
+
     static func isManagedNodePath(_ path: String) -> Bool {
         URL(fileURLWithPath: path).standardizedFileURL.path.hasPrefix(managedNodeRoot().path + "/")
     }
@@ -880,12 +1222,56 @@ private final class RuntimeDownloadState<T>: @unchecked Sendable {
     }
 }
 
+/// `concurrentMap` 的结果槽：按下标写入，互不覆盖。
+private final class ConcurrentResultBox<U>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var results: [Result<U, Error>?]
+
+    init(count: Int) {
+        results = Array(repeating: nil, count: count)
+    }
+
+    func store(_ result: Result<U, Error>, at index: Int) {
+        lock.lock()
+        results[index] = result
+        lock.unlock()
+    }
+
+    func value(at index: Int) -> Result<U, Error> {
+        lock.lock()
+        defer { lock.unlock() }
+        return results[index]
+            ?? .failure(RuntimeComponentInstallerError.runtimeDownloadFailed(
+                url: "",
+                message: "Concurrent probe did not produce a result."
+            ))
+    }
+}
+
+/// 工作线程共享的取号器。
+private final class ConcurrentIndexCursor: @unchecked Sendable {
+    private let lock = NSLock()
+    private var nextIndex = 0
+
+    func next(limit: Int) -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard nextIndex < limit else {
+            return nil
+        }
+        let index = nextIndex
+        nextIndex += 1
+        return index
+    }
+}
+
 private final class RuntimeFileDownloadDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     private let url: URL
     private let destination: URL
     private let label: String
     private let progress: (@Sendable (String) -> Void)?
     private let state: RuntimeDownloadState<Void>
+    private let cancellation: ShellCommandCancellation?
     private let signalCompletion: @Sendable () -> Void
     private let startedAt = Date()
     private var lastProgressUpdate = Date(timeIntervalSince1970: 0)
@@ -897,6 +1283,7 @@ private final class RuntimeFileDownloadDelegate: NSObject, URLSessionDownloadDel
         label: String,
         progress: (@Sendable (String) -> Void)?,
         state: RuntimeDownloadState<Void>,
+        cancellation: ShellCommandCancellation?,
         signalCompletion: @escaping @Sendable () -> Void
     ) {
         self.url = url
@@ -904,6 +1291,7 @@ private final class RuntimeFileDownloadDelegate: NSObject, URLSessionDownloadDel
         self.label = label
         self.progress = progress
         self.state = state
+        self.cancellation = cancellation
         self.signalCompletion = signalCompletion
     }
 
@@ -914,6 +1302,12 @@ private final class RuntimeFileDownloadDelegate: NSObject, URLSessionDownloadDel
         totalBytesWritten: Int64,
         totalBytesExpectedToWrite: Int64
     ) {
+        // 下载是运行时长任务里最长的一段，取消令牌在这里也要生效：
+        // 取消 URLSession 任务会让下面的 didCompleteWithError 立刻返回。
+        if cancellation?.isCancelled == true {
+            downloadTask.cancel()
+            return
+        }
         let now = Date()
         guard now.timeIntervalSince(lastProgressUpdate) >= 0.25 || totalBytesWritten == totalBytesExpectedToWrite else {
             return
@@ -950,6 +1344,11 @@ private final class RuntimeFileDownloadDelegate: NSObject, URLSessionDownloadDel
         didCompleteWithError error: Error?
     ) {
         defer { signalCompletion() }
+
+        if cancellation?.isCancelled == true {
+            state.complete(.failure(CancellationError()))
+            return
+        }
 
         if let error {
             state.complete(.failure(RuntimeComponentInstallerError.runtimeDownloadFailed(
@@ -1127,6 +1526,27 @@ private struct PythonFtpRelease {
             return nil
         }
         return "\(parts[0]).\(parts[1])"
+    }
+}
+
+/// python.org 官网下载 API 的 release 记录（只取资源地址，用来拿数字 id）。
+struct PythonApiRelease: Decodable {
+    let resourceURI: String
+
+    enum CodingKeys: String, CodingKey {
+        case resourceURI = "resource_uri"
+    }
+}
+
+/// python.org 官网下载 API 的文件记录。ftp 目录里已经没有 `.md5`，
+/// 但这里仍然给出每个文件的 `md5_sum`。
+struct PythonReleaseFile: Decodable {
+    let url: String
+    let md5Sum: String
+
+    enum CodingKeys: String, CodingKey {
+        case url
+        case md5Sum = "md5_sum"
     }
 }
 

@@ -4,6 +4,7 @@ import SwiftUI
 struct AIEnvironmentsView: View {
     @ObservedObject var store: AIEnvironmentStore
     var focusKind: AIEnvironmentKind?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var highlightedKind: AIEnvironmentKind?
 
@@ -23,31 +24,46 @@ struct AIEnvironmentsView: View {
                 }
                 .background(DesignColor.canvas)
 
-                if let status = store.statusMessage {
+                if let status = store.statusMessage, status.tone == .error {
+                    StatusBanner(text: status.text, onDismiss: { store.dismissStatus() })
+                } else if let status = store.statusMessage {
                     StatusBar(
                         text: status.text,
-                        tone: status.tone == .error ? .error : .notice,
+                        tone: .notice,
                         onDismiss: { store.dismissStatus() }
                     )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .transaction { transaction in
+                if reduceMotion {
+                    transaction.animation = nil
+                }
+            }
             .task(id: focusKind) {
                 await store.refreshIfNeeded()
                 guard let focusKind else {
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(80))
-                withAnimation(.snappy(duration: 0.2)) {
+                if reduceMotion {
                     proxy.scrollTo(focusKind, anchor: .center)
+                } else {
+                    withAnimation(.snappy(duration: 0.2)) {
+                        proxy.scrollTo(focusKind, anchor: .center)
+                    }
                 }
                 highlightedKind = focusKind
                 try? await Task.sleep(for: .seconds(1.6))
                 guard highlightedKind == focusKind else {
                     return
                 }
-                withAnimation(.easeOut(duration: 0.2)) {
+                if reduceMotion {
                     highlightedKind = nil
+                } else {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        highlightedKind = nil
+                    }
                 }
             }
         }
@@ -97,7 +113,9 @@ struct AIEnvironmentsView: View {
             VStack(spacing: 0) {
                 ForEach(Array(store.statuses.enumerated()), id: \.element.id) { index, status in
                     GroupRow(dividerAbove: index > 0) {
+                        // 同包管理器页：首屏扫描期间用占位态，避免把「未知」画成「未安装」。
                         toolRow(status)
+                            .redacted(reason: store.isLoading ? .placeholder : [])
                             .background(
                                 highlightedKind == status.kind
                                     ? Color.accentColor.opacity(0.08)
@@ -117,7 +135,15 @@ struct AIEnvironmentsView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 7) {
                     Text(status.kind.displayName)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(.body, weight: .semibold))
+
+                    if let currentVersion = status.currentVersion {
+                        Text(currentVersion)
+                            .rowVersionFont()
+                    } else if !status.isInstalled, let latestVersion = status.latestVersion {
+                        Text("最新版 \(latestVersion)")
+                            .rowVersionFont()
+                    }
 
                     if status.isInstalled {
                         Pill(status.installMethod.label, tone: .neutral)
@@ -138,7 +164,7 @@ struct AIEnvironmentsView: View {
                 }
 
                 if let executablePath = status.executablePath {
-                    Text(executablePath)
+                    Text(DisplayPath.short(executablePath))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -150,7 +176,11 @@ struct AIEnvironmentsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                versionLine(status)
+                if status.errorMessage?.isEmpty == false
+                    || status.updateAvailable
+                    || (status.isInstalled && status.currentVersion == nil) {
+                    versionLine(status)
+                }
             }
 
             Spacer(minLength: 12)
@@ -174,7 +204,7 @@ struct AIEnvironmentsView: View {
                     }
                     .appButton(.quiet, size: .small)
                 }
-                .frame(width: 190, alignment: .trailing)
+                .frame(minWidth: 230, alignment: .trailing)
                 .help(
                     store.busyAction(for: status.kind) == .install
                         ? "取消安装 \(status.kind.displayName)"
@@ -189,16 +219,19 @@ struct AIEnvironmentsView: View {
                     }
                     .appButton(.primary, size: .small)
                     .disabled(store.isBusy(status.kind))
+                    .frame(minWidth: 230, alignment: .trailing)
                 } else if status.latestVersion != nil {
                     Label("已是最新", systemImage: "checkmark")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .frame(minWidth: 230, alignment: .trailing)
                 } else {
                     Button("更新") {
                         Task { await store.update(status.kind) }
                     }
                     .appButton(.secondary, size: .small)
                     .disabled(store.isBusy(status.kind))
+                    .frame(minWidth: 230, alignment: .trailing)
                 }
             } else {
                 Button {
@@ -206,8 +239,9 @@ struct AIEnvironmentsView: View {
                 } label: {
                     Label("安装", systemImage: "arrow.down.circle")
                 }
-                .appButton(.primary, size: .small)
+                .appButton(.secondary, size: .small)
                 .disabled(store.isBusy(status.kind))
+                .frame(minWidth: 230, alignment: .trailing)
             }
 
             if status.isInstalled {
@@ -215,9 +249,13 @@ struct AIEnvironmentsView: View {
                     Button("在 Finder 中显示") {
                         DesktopPathActions.revealInFinder(status.executablePath ?? "")
                     }
+                    // 路径为空时以前是「点了没反应」（复制还会复制走空串）。禁用比留一个
+                    // 看起来可用的菜单项诚实。
+                    .disabled(!DesktopPathActions.isUsablePath(status.executablePath))
                     Button("复制可执行文件路径") {
                         WindowActions.copy(status.executablePath ?? "")
                     }
+                    .disabled(!DesktopPathActions.isUsablePath(status.executablePath))
                 } label: {
                     Image(systemName: "ellipsis")
                 }
@@ -249,17 +287,18 @@ struct AIEnvironmentsView: View {
 
             if status.updateAvailable, let latestVersion = status.latestVersion {
                 Image(systemName: "arrow.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(.caption2, weight: .semibold))
+                    .foregroundStyle(DesignColor.tertiaryText)
+                    .accessibilityHidden(true)
                 Text(latestVersion)
-                    .font(.system(size: 12, weight: .medium).monospacedDigit())
+                    .font(.system(.callout, weight: .medium).monospacedDigit())
                     .foregroundStyle(.secondary)
             }
 
             if let errorMessage = status.errorMessage, !errorMessage.isEmpty {
                 Text(errorMessage)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(DesignColor.statusNegative)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .help(errorMessage)
@@ -271,6 +310,7 @@ struct AIEnvironmentsView: View {
 struct AIEnvironmentBadge: View {
     let kind: AIEnvironmentKind
     var size: CGFloat = Metric.badgeSize
+    @ScaledMetric(relativeTo: .body) private var glyphScale: CGFloat = 1
 
     var body: some View {
         RoundedRectangle(cornerRadius: size * 0.29, style: .continuous)
@@ -278,8 +318,9 @@ struct AIEnvironmentBadge: View {
             .frame(width: size, height: size)
             .overlay {
                 Image(systemName: kind.symbol)
-                    .font(.system(size: size * 0.44, weight: .semibold))
+                    .font(.system(size: size * 0.44 * glyphScale, weight: .semibold))
                     .foregroundStyle(kind.tint)
+                    .accessibilityHidden(true)
             }
             .accessibilityHidden(true)
     }
@@ -315,13 +356,13 @@ extension AIEnvironmentKind {
     var tint: Color {
         switch self {
         case .codex:
-            return Color(red: 0.20, green: 0.48, blue: 0.78)
+            return DesignColor.brandTint(red: 0.20, green: 0.48, blue: 0.78)
         case .claudeCode:
-            return Color(red: 0.83, green: 0.39, blue: 0.18)
+            return DesignColor.brandTint(red: 0.83, green: 0.39, blue: 0.18)
         case .pi:
-            return Color(red: 0.22, green: 0.62, blue: 0.42)
+            return DesignColor.brandTint(red: 0.22, green: 0.62, blue: 0.42)
         case .openCode:
-            return Color(red: 0.50, green: 0.39, blue: 0.78)
+            return DesignColor.brandTint(red: 0.50, green: 0.39, blue: 0.78)
         }
     }
 }

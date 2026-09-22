@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 import SwiftUI
 
@@ -125,3 +126,20 @@ enum MenuBarSnapshot {
         return directory.appendingPathComponent("\(base)\(suffix).\(ext)")
     }
 }
+
+#else
+
+// Release 构建下这些探针整体不存在：它们是开发期排查折叠卡顿、离线出图和验证设置入口
+// 用的工具，没有理由把上千行诊断代码、以及每次 body 求值都要跑一遍的环境变量检查
+// 带进发布包。需要它们时用调试构建（`swift build` / `swift run`）。
+
+import AppKit
+import ENVPilotCore
+
+/// 发布构建下的空实现（见 `Probe.swift` 顶部说明）。
+@MainActor
+enum MenuBarSnapshot {
+    static func runIfRequested(store: NodeRuntimeStore, updates: AppUpdateModel) {}
+}
+
+#endif

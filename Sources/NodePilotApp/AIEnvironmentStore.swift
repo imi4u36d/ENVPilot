@@ -29,7 +29,17 @@ final class AIEnvironmentStore: ObservableObject {
 
     private let service: any AIEnvironmentServicing
     private var cancellations: [AIEnvironmentKind: ShellCommandCancellation] = [:]
-    private var hasLoaded = false
+    /// 上一次扫描完成的时间。`hasLoaded` 永不过期会把几小时前的结论当成现状，
+    /// 所以改成「新鲜度窗口 + 时间戳」，环境检查面板拿到的一定是近期数据。
+    private var loadedAt: Date?
+    /// 正在进行的扫描。后来者 await 它，而不是轮询 `isLoading`。
+    private var loadTask: Task<[AIEnvironmentStatus], Never>?
+
+    /// 扫描结果的新鲜度窗口。`refreshIfNeeded()` 在这段时间内直接复用。
+    static let statusTTL: TimeInterval = 60
+    /// 等一次在途扫描的上限。Core 的 shell 命令默认有 30 分钟墙钟上限，
+    /// 但界面不该陪着它等 30 分钟，所以这里单独收口。
+    private static let scanTimeout: Duration = .seconds(150)
 
     init(service: any AIEnvironmentServicing = LocalAIEnvironmentService()) {
         self.service = service
@@ -65,39 +75,66 @@ final class AIEnvironmentStore: ObservableObject {
         statuses.contains { $0.updateAvailable && !isBusy($0.kind) }
     }
 
+    /// 状态是否足够新，可以直接复用。
+    var hasFreshStatuses: Bool {
+        guard let loadedAt else {
+            return false
+        }
+        return Date().timeIntervalSince(loadedAt) < Self.statusTTL
+    }
+
     func refresh() async {
-        guard !isLoading, !isUpdating else {
+        guard !isUpdating else {
+            return
+        }
+        // 已经有扫描在跑：等它，而不是再起一次。
+        if let inFlight = loadTask {
+            if case .success(.none) = await BoundedAwait.value(of: inFlight, timeout: Self.scanTimeout) {
+                reportScanTimeout()
+            }
             return
         }
         isLoading = true
         statusMessage = nil
-
         let service = self.service
-        let loaded = await Task.detached(priority: .userInitiated) {
+        let task = Task.detached(priority: .userInitiated) {
             await service.loadStatuses()
-        }.value
+        }
+        loadTask = task
+        defer {
+            loadTask = nil
+            isLoading = false
+        }
 
+        guard case .success(.some(let loaded)) = await BoundedAwait.value(of: task, timeout: Self.scanTimeout) else {
+            reportScanTimeout()
+            return
+        }
         statuses = loaded
-        hasLoaded = true
-        isLoading = false
+        loadedAt = Date()
+    }
+
+    /// 扫描超时：保留上一次结果并提示一次，避免把旧结论当成现状。
+    private func reportScanTimeout() {
+        guard statusMessage == nil else {
+            return
+        }
+        statusMessage = StatusMessage(
+            text: "读取 AI 环境状态超时，已放弃等待；稍后可以再刷新一次。",
+            tone: .error
+        )
     }
 
     func refreshIfNeeded() async {
-        guard !hasLoaded else {
+        guard !hasFreshStatuses else {
             return
         }
         await refresh()
     }
 
+    /// 「等到有结果再返回」。新的 `refresh()` 本身就会等在途扫描，
+    /// 所以这里不再需要单独轮询 `isLoading`（原先的轮询没有上限）。
     func refreshIfNeededAndWait() async {
-        if isLoading {
-            while isLoading {
-                try? await Task.sleep(for: .milliseconds(60))
-            }
-            if hasLoaded {
-                return
-            }
-        }
         await refreshIfNeeded()
     }
 
@@ -114,6 +151,11 @@ final class AIEnvironmentStore: ObservableObject {
     }
 
     func cancelOperation(_ kind: AIEnvironmentKind) {
+        // 没有在跑的操作时必须直接返回：`.cancelling` 的 rawValue 最大，
+        // 一旦写上就只有 `perform` 的 defer 能清掉，会把这一行永久钉在「正在取消…」。
+        guard isBusy(kind) else {
+            return
+        }
         updateStages[kind] = .cancelling
         cancellations[kind]?.cancel()
     }

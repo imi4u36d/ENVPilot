@@ -11,6 +11,9 @@ struct ENVPilotApp: App {
     @StateObject private var loginItem: LoginItemModel
     @StateObject private var environmentCheck: EnvironmentCheckStore
     @AppStorage(AppPreferenceKey.showsMenuBarMenu) private var showsMenuBarMenu = true
+    @AppStorage(AppStateKey.sidebarCollapsed) private var sidebarCollapsed = false
+    @FocusedValue(\.runtimeFilterFocus) private var runtimeFilterFocus
+    @FocusedValue(\.sectionNavigation) private var sectionNavigation
 
     init() {
         let store = NodeRuntimeStore()
@@ -53,7 +56,9 @@ struct ENVPilotApp: App {
                 updates: updates,
                 environmentCheck: environmentCheck
             )
-                .frame(minWidth: 880, minHeight: 560)
+                // 880×560 会挡住 1440 宽屏幕上的半屏平铺（平铺后约 720pt）。
+                // 侧边栏最小 190 + 内容最小 400，640×480 就够用。
+                .frame(minWidth: 640, minHeight: 480)
         }
         .defaultSize(width: 1120, height: 740)
         .windowResizability(.contentMinSize)
@@ -71,16 +76,43 @@ struct ENVPilotApp: App {
             // 刷新原来是侧边栏底部的一个小按钮，现在挪进「显示」菜单。
             // `⌘R` 保持不变，只是不再占底部那一行。
             CommandGroup(after: .sidebar) {
-                Button("重新读取运行时信息") {
+                Button("刷新运行时状态") {
                     Task { await store.refresh() }
                 }
                 .keyboardShortcut("r", modifiers: .command)
                 .disabled(store.isBusy)
 
-                Button("切换侧边栏") {
+                Button("聚焦版本筛选") {
+                    runtimeFilterFocus?()
+                }
+                .keyboardShortcut("f", modifiers: .command)
+                .disabled(runtimeFilterFocus == nil)
+
+                Button(sidebarCollapsed ? "显示侧边栏" : "隐藏侧边栏") {
                     WindowActions.toggleSidebar()
                 }
                 .keyboardShortcut("s", modifiers: [.command, .control])
+
+                Divider()
+
+                // 四个页面此前只能靠鼠标点侧边栏。⌘1–⌘4 是 macOS 里表达
+                // 「第 N 个平行视图」的固定写法。
+                ForEach(Array(AppSection.allCases.enumerated()), id: \.element) { index, item in
+                    Button(item.title) {
+                        sectionNavigation?(item)
+                    }
+                    .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                    .disabled(sectionNavigation == nil)
+                }
+
+                Divider()
+
+                // 侧边栏底部那两个按钮（检查环境 / 设置）不该是唯一入口：
+                // 设置本来就在应用菜单里，这里给「环境检查」补一条。
+                Button("检查并修复本地环境") {
+                    environmentCheck.present()
+                }
+                .disabled(environmentCheck.isBusy)
             }
 
             // 「帮助」菜单里那条 Toggle Sidebar 是 SwiftUI 自己塞的，标题是硬编码英文，
@@ -98,6 +130,7 @@ struct ENVPilotApp: App {
             MenuBarView(store: store, updates: updates)
         } label: {
             Image(nsImage: MenuBarIcon.image)
+                .accessibilityLabel("ENVPilot")
         }
         .menuBarExtraStyle(.window)
 

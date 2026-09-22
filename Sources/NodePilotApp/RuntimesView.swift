@@ -10,6 +10,7 @@ struct RuntimesView: View {
     @State private var searchText = ""
     @State private var recommendedOnly = true
     @State private var pendingUninstall: RuntimeUninstallRequest?
+    @State private var filterFocusToken = 0
 
     private let maximumVisibleCandidates = 40
 
@@ -60,6 +61,9 @@ struct RuntimesView: View {
                 Text("将删除 \(request.displayName)。\n\(request.path)")
             }
         }
+        .focusedValue(\.runtimeFilterFocus) {
+            filterFocusToken += 1
+        }
     }
 
     // MARK: 固定工具栏
@@ -82,8 +86,8 @@ struct RuntimesView: View {
 
                 Spacer(minLength: 12)
 
-                SearchField(text: $searchText, placeholder: kind.searchPrompt)
-                    .frame(width: 250, height: 24)
+                SearchField(text: $searchText, placeholder: kind.searchPrompt, focusToken: filterFocusToken)
+                    .frame(minWidth: 200, idealWidth: 250, maxWidth: 340, minHeight: 24)
                     .accessibilityLabel(kind.searchPrompt)
 
                 Toggle(kind.filterTitle, isOn: $recommendedOnly)
@@ -137,7 +141,7 @@ struct RuntimesView: View {
                     }
                 }
 
-                Text(option.path)
+                Text(DisplayPath.short(option.path))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -151,11 +155,14 @@ struct RuntimesView: View {
                 ProgressView()
                     .controlSize(.small)
             } else if !isCurrent {
-                Button("设为默认") {
+                // 列表里会有多个「设为默认」：按钮文案带上版本，VoiceOver 逐条读时
+                // 才分得清是哪一条（同文件 :327 已经用了这个写法）。
+                Button("将 \(VersionLabel.display(kind, option.version)) 设为默认") {
                     Task { await store.selectDefault(option) }
                 }
                 .appButton(.secondary, size: .small)
                 .disabled(store.isBusy)
+                .help("将该版本设为终端默认")
             }
 
             if option.isManaged {
@@ -192,11 +199,11 @@ struct RuntimesView: View {
                 Button {
                     Task { await store.loadCandidates(for: kind, force: true) }
                 } label: {
-                    Label("重新获取", systemImage: "arrow.clockwise")
+                    Label("刷新版本列表", systemImage: "arrow.clockwise")
                 }
                 .appButton(.quiet, size: .small)
                 .disabled(store.isBusy)
-                .help("重新获取 \(kind.title) 官方版本列表")
+                .help("刷新 \(kind.title) 官方版本列表")
             )
         ) {
             candidateList
@@ -222,7 +229,7 @@ struct RuntimesView: View {
                 EmptyState(
                     symbol: "cloud.download",
                     title: "还没有载入 \(kind.title) 版本列表",
-                    message: "点击右上角「重新获取」从官方分发读取。"
+                    message: "点击右上角「刷新版本列表」从官方分发读取。"
                 )
             }
         } else if visible.isEmpty {
@@ -266,6 +273,14 @@ struct RuntimesView: View {
         let key = "install:\(candidate.id)"
         let isInstalling = store.isBusy(key: key)
         let progress = store.progress(forKey: key)
+        let summary = store.summary(for: kind)
+        let installedOption = summary.options.first { option in
+            RuntimeSnapshotReader.matches(
+                installed: option.version,
+                requested: candidate.argument,
+                kind: candidate.kind
+            )
+        }
 
         return HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
@@ -304,18 +319,38 @@ struct RuntimesView: View {
             Spacer(minLength: 12)
 
             if candidate.isInstalled {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                    .accessibilityLabel("已安装")
-            } else if !isInstalling {
+                if let installedOption, summary.current?.id != installedOption.id {
+                    Button {
+                        Task { await store.selectDefault(installedOption) }
+                    } label: {
+                        Label("设为默认", systemImage: "checkmark.circle")
+                    }
+                    .appButton(.secondary, size: .small)
+                    .disabled(store.isBusy)
+                    .accessibilityLabel("将 \(candidate.title) 设为默认")
+                } else {
+                    Image(systemName: "checkmark")
+                        .font(.system(.subheadline, weight: .semibold))
+                        .foregroundStyle(DesignColor.tertiaryText)
+                        .accessibilityLabel("已安装")
+                }
+            } else if isInstalling {
+                // 运行时安装可能是几分钟的下载 + 解包，必须留出口；取消会杀掉整棵
+                // 进程树，而不是只把界面切回去。
+                Button("取消") {
+                    store.cancelOperation(candidate.kind)
+                }
+                .appButton(.secondary, size: .small)
+                .accessibilityLabel("取消安装 \(VersionLabel.display(kind, candidate.displayVersion))")
+            } else {
                 Button {
                     Task { await store.install(candidate) }
                 } label: {
                     Label("安装", systemImage: "square.and.arrow.down")
                 }
-                .appButton(.primary, size: .small)
+                .appButton(.secondary, size: .small)
                 .disabled(store.isBusy)
+                .accessibilityLabel("安装 \(VersionLabel.display(kind, candidate.displayVersion))")
             }
         }
     }

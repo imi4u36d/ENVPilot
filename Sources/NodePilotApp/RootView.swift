@@ -5,6 +5,7 @@ import SwiftUI
 // MARK: - Root shell
 
 struct RootView: View {
+    @Environment(\.openWindow) private var openWindow
     @ObservedObject var store: NodeRuntimeStore
     @ObservedObject var aiStore: AIEnvironmentStore
     @ObservedObject var packageManagerStore: PackageManagerStore
@@ -33,7 +34,9 @@ struct RootView: View {
     }
 
     var body: some View {
+#if DEBUG
         let _ = PerfProbe.noteBody("root")
+#endif
         // 两栏交给 AppKit 原生的 NSSplitViewController（见 `NativeSidebarShell`）：
         // SwiftUI 的 `NavigationSplitView` 在这台机器上不是原生实现，折叠动画既不能
         // 反向重定向、又绕过 binding，点快了就是「跳一下」。
@@ -45,6 +48,13 @@ struct RootView: View {
         // （AppKit 的 `allowsFullHeightLayout` 会自己给两栏留出标题栏的安全区。）
         .ignoresSafeArea(.container, edges: .top)
         .flatTitleBar()
+        // 标题栏是隐藏的，但窗口标题仍会出现在「窗口」菜单与 VoiceOver 里：
+        // 让它是当前页面名，而不是永远一个 App 名。
+        .navigationTitle((section ?? .overview).title)
+        .focusedSceneValue(\.sectionNavigation) { destination in
+            aiFocusKind = nil
+            section = destination
+        }
         .sheet(isPresented: $environmentCheck.isPresented, onDismiss: {
             hasCompletedEnvironmentCheck = true
         }) {
@@ -54,6 +64,8 @@ struct RootView: View {
             }
         }
         .onAppear {
+            // `openWindow` 只在这里可用；Dock 重新打开时由 AppKit 侧回调过来。
+            MainWindowPresenter.register { openWindow(id: "main") }
             guard !didOfferFirstLaunchCheck, !hasCompletedEnvironmentCheck else {
                 return
             }
@@ -115,9 +127,9 @@ struct RootView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("ENVPilot")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(.body, weight: .semibold))
                 Text("开发环境管理")
-                    .font(.system(size: 11))
+                    .font(.system(.subheadline))
                     .foregroundStyle(.secondary)
             }
 
@@ -144,8 +156,8 @@ struct RootView: View {
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color(red: 0.27, green: 0.55, blue: 0.93),
-                            Color(red: 0.20, green: 0.42, blue: 0.82),
+                            DesignColor.brandTint(red: 0.27, green: 0.55, blue: 0.93),
+                            DesignColor.brandTint(red: 0.20, green: 0.42, blue: 0.82),
                         ],
                         startPoint: .top,
                         endPoint: .bottom
@@ -154,7 +166,7 @@ struct RootView: View {
                 .frame(width: 30, height: 30)
                 .overlay {
                     Image(systemName: "terminal.fill")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(.body, weight: .semibold))
                         .foregroundStyle(.white)
                 }
                 .accessibilityHidden(true)
@@ -174,7 +186,7 @@ struct RootView: View {
                     section = item
                 } label: {
                 Label(item.title, systemImage: item.symbol)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(.body, weight: .medium))
                     .foregroundStyle(
                         (section ?? .overview) == item ? Color.accentColor : Color.primary
                     )
@@ -239,11 +251,14 @@ struct RootView: View {
         VStack(spacing: 0) {
             let activeSection = section ?? .overview
             PageHeader(title: activeSection.title, subtitle: activeSection.subtitle)
+            if let status = store.statusMessage, status.tone == .error {
+                StatusBanner(text: status.text, onDismiss: { store.dismissStatus() })
+            }
             detailContent
-            if let status = store.statusMessage {
+            if let status = store.statusMessage, status.tone != .error {
                 StatusBar(
                     text: status.text,
-                    tone: status.tone == .error ? .error : .notice,
+                    tone: .notice,
                     onDismiss: { store.dismissStatus() }
                 )
             }

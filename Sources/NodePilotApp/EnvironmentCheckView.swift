@@ -33,14 +33,15 @@ struct EnvironmentCheckView: View {
                     .frame(width: 44, height: 44)
 
                 Image(systemName: store.needsRepair ? "wrench.and.screwdriver.fill" : "checkmark.shield.fill")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.system(.title2, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
                     .contentTransition(.opacity)
+                    .accessibilityHidden(true)
             }
 
             VStack(alignment: .leading, spacing: 5) {
                 Text("环境检查")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.system(.title2, weight: .semibold))
 
                 Text("检查 ENVPilot 运行 AI 工具所需的基础配置，缺少的必需项可以一键补齐。")
                     .font(.callout)
@@ -55,15 +56,26 @@ struct EnvironmentCheckView: View {
     @ViewBuilder
     private var messageSlot: some View {
         Group {
-            if let message = store.message {
+            if store.isRepairing {
+                // 修复会装命令行工具、下载 Node，只转一个不确定的菊花是不够的：
+                // 把服务端发来的阶段文字显示出来，用户才知道在进行哪一步。
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(store.repairStage ?? "正在配置…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else if let message = store.message {
                 Text(message)
                     .font(.callout)
-                    .foregroundStyle(store.needsRepair ? .orange : .secondary)
+                    .foregroundStyle(store.needsRepair ? DesignColor.statusWarning : Color.secondary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 18, maxHeight: 18, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: 18, alignment: .topLeading)
     }
 
     private var footer: some View {
@@ -84,20 +96,21 @@ struct EnvironmentCheckView: View {
             .appButton(.quiet, size: .small)
             .disabled(store.isBusy)
 
-            if store.needsRepair || store.isRepairing {
+            if store.isRepairing {
+                // 一键配置可能要几分钟，必须留一个能停下来的出口（HIG：让用户能中止处理）。
+                Button("取消配置") {
+                    store.cancelRepair()
+                }
+                .appButton(.secondary, size: .small)
+            } else if store.needsRepair {
                 Button {
                     Task { await store.repair() }
                 } label: {
-                    Label(
-                        store.isRepairing ? "正在配置" : "一键配置",
-                        systemImage: store.isRepairing ? "hourglass" : "wand.and.stars"
-                    )
+                    Label("一键配置", systemImage: "wand.and.stars")
                 }
                 .appButton(.primary, size: .small)
                 .disabled(store.isBusy)
-            }
-
-            if !store.needsRepair {
+            } else {
                 Button("完成") {
                     onClose()
                 }
@@ -125,8 +138,9 @@ private struct EnvironmentCheckRow: View {
                             .frame(width: 30, height: 30)
 
                         Image(systemName: statusSymbol)
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.system(.body, weight: .semibold))
                             .foregroundStyle(statusTint)
+                            .accessibilityHidden(true)
                     }
                 }
             }
@@ -141,17 +155,17 @@ private struct EnvironmentCheckRow: View {
                     }
                 }
 
+                // 这段 detail 是这个面板存在的理由（缺什么、为什么），以前被
+                // `lineLimit(1)` 裁成一行且没有 `.help()` 兜底，等于把结论藏起来。
                 Text(check.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
                     .fixedSize(horizontal: false, vertical: true)
 
                 if let repairHint = check.repairHint, check.status == .needsRepair || check.status == .failed {
                     Text(repairHint)
                         .font(.caption)
                         .foregroundStyle(statusTint)
-                        .lineLimit(1)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -165,6 +179,7 @@ private struct EnvironmentCheckRow: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(statusTint.opacity(0.16), lineWidth: 1)
         }
+        .accessibilityElement(children: .combine)
     }
 
     private var statusSymbol: String {
@@ -187,13 +202,13 @@ private struct EnvironmentCheckRow: View {
         case .loading:
             return .secondary
         case .ok:
-            return Color(red: 0.18, green: 0.63, blue: 0.36)
+            return DesignColor.statusPositive
         case .needsRepair:
-            return Color(red: 0.88, green: 0.55, blue: 0.12)
+            return DesignColor.statusWarning
         case .optional:
             return .secondary
         case .failed:
-            return Color(red: 0.82, green: 0.25, blue: 0.22)
+            return DesignColor.statusNegative
         }
     }
 }

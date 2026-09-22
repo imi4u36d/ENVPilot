@@ -112,12 +112,27 @@ public final class NodeEnvironmentService: Sendable {
 
     @discardableResult
     public func installNode(version: String) throws -> NodeRuntimeSnapshot {
-        try installNode(version: version, progress: nil)
+        try installNode(version: version, cancellation: nil, progress: nil)
     }
 
+    /// `EnvironmentNodeRuntimeProviding` 要求的旧入口，内部转发到带取消令牌的版本。
     @discardableResult
     public func installNode(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot {
-        let installation = try componentInstaller.installNode(version: version, progress: progress)
+        try installNode(version: version, cancellation: nil, progress: progress)
+    }
+
+    /// 带取消令牌的安装入口：运行时安装是本 App 最长的操作，下载/构建都必须能停下。
+    @discardableResult
+    public func installNode(
+        version: String,
+        cancellation: ShellCommandCancellation? = nil,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeRuntimeSnapshot {
+        let installation = try componentInstaller.installNode(
+            version: version,
+            cancellation: cancellation,
+            progress: progress
+        )
 
         var settings = try configStore.load()
         settings.selectedVersion = installation.version
@@ -180,8 +195,24 @@ public final class NodeEnvironmentService: Sendable {
     }
 
     @discardableResult
-    public func installJava(featureVersion: Int, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot {
-        let installation = try componentInstaller.installJava(featureVersion: featureVersion, progress: progress)
+    public func installJava(
+        featureVersion: Int,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeRuntimeSnapshot {
+        try installJava(featureVersion: featureVersion, cancellation: nil, progress: progress)
+    }
+
+    @discardableResult
+    public func installJava(
+        featureVersion: Int,
+        cancellation: ShellCommandCancellation? = nil,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeRuntimeSnapshot {
+        let installation = try componentInstaller.installJava(
+            featureVersion: featureVersion,
+            cancellation: cancellation,
+            progress: progress
+        )
         var settings = try configStore.load()
         settings.selectedJavaVersion = installation.version
         settings.selectedJavaHome = installation.homePath
@@ -241,8 +272,24 @@ public final class NodeEnvironmentService: Sendable {
     }
 
     @discardableResult
-    public func installPython(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeRuntimeSnapshot {
-        let installation = try componentInstaller.installPython(version: version, progress: progress)
+    public func installPython(
+        version: String,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeRuntimeSnapshot {
+        try installPython(version: version, cancellation: nil, progress: progress)
+    }
+
+    @discardableResult
+    public func installPython(
+        version: String,
+        cancellation: ShellCommandCancellation? = nil,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeRuntimeSnapshot {
+        let installation = try componentInstaller.installPython(
+            version: version,
+            cancellation: cancellation,
+            progress: progress
+        )
         var settings = try configStore.load()
         settings.selectedPythonVersion = installation.version
         settings.selectedPythonHome = installation.homePath

@@ -17,6 +17,7 @@ struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// 固定面板宽度；离屏快照可复用同一套排版。
     static let panelWidth: CGFloat = 348
@@ -24,8 +25,14 @@ struct MenuBarView: View {
     static let panelMaxHeight: CGFloat = 620
 
     /// 当前展开版本列表的运行时；`nil` 表示只展示摘要。
+    /// 面板高度预算与宽度跟着系统文字大小走。正文本身不滚动（见 body 的注释），
+    /// 所以预算必须一起长，否则大字号下页脚会被 `maxHeight` 直接裁掉。
+    @ScaledMetric(relativeTo: .body) private var panelHeightScale: CGFloat = 1
+    @ScaledMetric(relativeTo: .body) private var panelWidthScale: CGFloat = 1
+
     @State private var picking: RuntimeKind?
     @State private var didRequestRefresh = false
+    @State private var operationError: String?
 
     /// 版本列表展开时最多占用的高度，超出后列表内部滚动。
     private static let expandedListHeight: CGFloat = 232
@@ -45,8 +52,8 @@ struct MenuBarView: View {
         // 正文本身高度确定（摘要态约 300，展开态约 560，均在 `panelMaxHeight` 以内），
         // 需要滚动的只有展开后的版本列表，由 `expandedListHeight` 显式限高。
         panelContent
-            .frame(width: Self.panelWidth)
-            .frame(maxHeight: Self.panelMaxHeight, alignment: .top)
+            .frame(width: Self.panelWidth * panelWidthScale)
+            .frame(maxHeight: Self.panelMaxHeight * panelHeightScale, alignment: .top)
             .fixedSize(horizontal: false, vertical: true)
             .panelChrome(colorScheme)
             .onAppear(perform: refreshIfNeeded)
@@ -69,8 +76,9 @@ struct MenuBarView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 9) {
             Image(systemName: "terminal.fill")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(.subheadline, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
+                .accessibilityHidden(true)
                 .frame(width: 24, height: 24)
                 .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
 
@@ -92,10 +100,21 @@ struct MenuBarView: View {
                         .truncationMode(.middle)
                 }
                 .frame(maxWidth: 180, alignment: .trailing)
+            } else if !store.lastRefreshSucceeded {
+                Button {
+                    Task { await store.refresh() }
+                } label: {
+                    Label("读取失败", systemImage: "exclamationmark.circle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(DesignColor.statusNegative)
+                }
+                .buttonStyle(.plain)
+                .help("重新读取运行时状态")
+                .accessibilityLabel("运行时状态读取失败，点击重试")
             } else {
                 Label("已同步", systemImage: "checkmark.circle.fill")
                     .font(.caption2)
-                    .foregroundStyle(.green)
+                    .foregroundStyle(DesignColor.statusPositive)
                     .labelStyle(.titleAndIcon)
             }
         }
@@ -127,8 +146,13 @@ struct MenuBarView: View {
 
         return VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.snappy(duration: 0.18)) {
+                operationError = nil
+                if reduceMotion {
                     picking = isExpanded ? nil : kind
+                } else {
+                    withAnimation(.snappy(duration: 0.18)) {
+                        picking = isExpanded ? nil : kind
+                    }
                 }
             } label: {
                 HStack(spacing: 10) {
@@ -162,9 +186,10 @@ struct MenuBarView: View {
                     .layoutPriority(1)
 
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.tertiary)
+                        .font(.system(.caption2, weight: .semibold))
+                        .foregroundStyle(DesignColor.tertiaryText)
                         .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                        .accessibilityHidden(true)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 9)
@@ -178,6 +203,22 @@ struct MenuBarView: View {
             if isExpanded {
                 pickerList(kind)
                     .transition(.opacity.combined(with: .move(edge: .top)))
+
+                if let operationError, picking == kind {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(.system(.caption))
+                            .accessibilityHidden(true)
+                        Text(operationError)
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(DesignColor.statusNegative)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                    .accessibilityElement(children: .combine)
+                }
             }
         }
     }
@@ -194,13 +235,14 @@ struct MenuBarView: View {
             if summary.current == nil, !summary.options.isEmpty {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 9))
+                        .font(.system(.caption2))
+                        .accessibilityHidden(true)
                     Text("生效版本 \(VersionLabel.display(kind, summary.version)) 未安装")
                         .font(.caption2)
                         .lineLimit(1)
                     Spacer(minLength: 0)
                 }
-                .foregroundStyle(.orange)
+                .foregroundStyle(DesignColor.statusWarning)
                 .padding(.horizontal, 16)
                 .padding(.top, 6)
             }
@@ -210,12 +252,14 @@ struct MenuBarView: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "gearshape.2")
-                        .font(.system(size: 10))
+                        .font(.system(.caption))
+                        .accessibilityHidden(true)
                     Text("打开运行时页管理")
                         .font(.caption)
                     Spacer(minLength: 0)
                     Image(systemName: "arrow.up.forward")
-                        .font(.system(size: 9))
+                        .font(.system(.caption2))
+                        .accessibilityHidden(true)
                 }
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 12)
@@ -252,8 +296,9 @@ struct MenuBarView: View {
         if summary.options.isEmpty {
             HStack(spacing: 8) {
                 Image(systemName: "shippingbox")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(.subheadline))
+                    .foregroundStyle(DesignColor.tertiaryText)
+                    .accessibilityHidden(true)
                 Text("尚未安装 \(summary.kind.title) 运行时")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -269,10 +314,17 @@ struct MenuBarView: View {
                         subtitle: option.isManaged ? "ENVPilot 管理" : "系统安装",
                         isSelected: option.id == summary.current?.id
                     ) {
-                        picking = nil
-                        // 选完即收起面板；`.window` 样式下 `dismiss()` 即为关闭弹层。
-                        dismiss()
-                        Task { await store.selectDefault(option) }
+                        operationError = nil
+                        Task {
+                            let succeeded = await store.selectDefault(option)
+                            if succeeded {
+                                // 选完才收起面板；失败时保留展开状态并就地显示错误。
+                                dismiss()
+                            } else {
+                                operationError = store.statusMessage?.text ?? "切换版本失败，请稍后重试。"
+                                picking = summary.kind
+                            }
+                        }
                     }
                 }
             }
@@ -286,7 +338,7 @@ struct MenuBarView: View {
     private var statusSection: some View {
         Text("切换版本后，新开的终端才会用上")
             .font(.caption2)
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(DesignColor.tertiaryText)
             .padding(.horizontal, 4)
     }
 
@@ -329,9 +381,10 @@ struct MenuBarView: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: symbol)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(.subheadline, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(width: 16)
+                    .accessibilityHidden(true)
 
                 Text(title)
                     .font(.callout)
@@ -342,7 +395,7 @@ struct MenuBarView: View {
                 if let shortcut {
                     Text(shortcut)
                         .font(.caption2.monospaced())
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DesignColor.tertiaryText)
                 }
             }
             .padding(.horizontal, 10)
@@ -356,13 +409,15 @@ struct MenuBarView: View {
 
     private func kindBadge(_ kind: RuntimeKind, isActive: Bool) -> some View {
         Image(systemName: kind.symbol)
-            .font(.system(size: 12, weight: .medium))
+            .font(.system(.callout, weight: .medium))
             .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
             .frame(width: 22, height: 22)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(panelWell(colorScheme).opacity(isActive ? 1 : 0.6))
             )
+            // 装饰性字形：旁边的文字已经说明了是哪个运行时。
+            .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -404,27 +459,33 @@ private struct PickerRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
+                // 未选中时以前用 `.clear` 把勾藏起来：选中态只剩颜色，色觉障碍用户
+                // 看不出选了哪个。留一个占位勾，选中时再上色。
                 Image(systemName: "checkmark")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.system(.caption, weight: .bold))
                     .foregroundStyle(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.clear))
                     .frame(width: 12)
+                    .accessibilityHidden(true)
 
                 Text(text)
-                    .font(.caption.monospaced())
+                    .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.primary)
+                    .fontWeight(isSelected ? .semibold : .regular)
 
                 Spacer(minLength: 8)
 
                 Text(subtitle)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(DesignType.micro)
+                    .foregroundStyle(DesignColor.tertiaryText)
             }
             .padding(.horizontal, 12)
-            .frame(height: 28)
+            .frame(minHeight: 28)
             .contentShape(Rectangle())
         }
         .buttonStyle(PanelRowButtonStyle())
         .help("切换到 \(text)")
+        .accessibilityLabel("\(text)，\(subtitle)")
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 }
 
@@ -467,9 +528,12 @@ private struct PanelSection: ViewModifier {
     }
 }
 
-/// 面板描边：深色下需要比窗口分隔线更亮，否则卡片边界消失。
+/// 面板描边。`DesignColor.hairline` 自己按外观（含「提高对比度」）取色，
+/// 所以这里不需要再按 `scheme` 分支——原注释说「深色下更亮」但实现忽略入参，
+/// 是注释与代码不一致，这里改成如实描述。
 private func panelHairline(_ scheme: ColorScheme) -> Color {
-    DesignColor.hairline
+    _ = scheme
+    return DesignColor.hairline
 }
 
 /// 面板里的中性凹槽 / 徽章底色。与主窗口的 `DesignColor.well` 同值，
@@ -478,9 +542,11 @@ private func panelWell(_ scheme: ColorScheme) -> Color {
     DesignColor.well
 }
 
-/// 面板内的裸行按钮：悬停高亮 + 按下反馈。
+/// 面板内的裸行按钮：悬停高亮 + 按下反馈 + 键盘焦点环。
 private struct PanelRowButtonStyle: ButtonStyle {
     @State private var isHovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isFocused) private var isFocused
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -488,10 +554,22 @@ private struct PanelRowButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(isHovering ? PanelChrome.rowHighlight : Color.clear)
             )
+            .overlay {
+                // 以前这条键盘路径完全没有焦点提示，Tab 到哪一行看不出来。
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(
+                        isFocused ? DesignColor.primaryAction.opacity(0.92) : .clear,
+                        lineWidth: 2
+                    )
+            }
             .opacity(configuration.isPressed ? 0.72 : 1)
             .onHover { hovering in
-                withAnimation(.easeOut(duration: 0.12)) {
+                if reduceMotion {
                     isHovering = hovering
+                } else {
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        isHovering = hovering
+                    }
                 }
             }
     }

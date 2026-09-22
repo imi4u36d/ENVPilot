@@ -59,6 +59,26 @@ final class NodeEnvironmentServiceTests: XCTestCase {
         XCTAssertFalse(shell.commands.contains { $0.contains("nvm install") })
     }
 
+    func testInstallNodeForwardsCancellationTokenToInstaller() throws {
+        let store = InMemoryStore(settings: AppSettings())
+        let shell = MockShellRunner()
+        let installer = MockInstaller()
+        let detector = MockDetector(installations: [], activeVersion: nil, activeNodePath: nil)
+        let service = NodeEnvironmentService(
+            configStore: store,
+            detector: detector,
+            javaDetector: MockJavaDetector(),
+            componentInstaller: installer,
+            shellRunner: shell
+        )
+        let cancellation = ShellCommandCancellation()
+
+        _ = try service.installNode(version: "20.11.1", cancellation: cancellation, progress: nil)
+
+        XCTAssertEqual(installer.receivedCancellations.count, 1)
+        XCTAssertTrue(installer.receivedCancellations[0] === cancellation)
+    }
+
     func testInstallNodeAcceptsMajorVersionSpec() throws {
         let store = InMemoryStore(settings: AppSettings())
         let shell = MockShellRunner()
@@ -380,12 +400,18 @@ private struct MockJavaDetector: JavaRuntimeDetecting {
 
 private final class MockInstaller: RuntimeComponentInstalling, @unchecked Sendable {
     private(set) var operations: [String] = []
+    private(set) var receivedCancellations: [ShellCommandCancellation?] = []
 
     func listAvailableNodeVersions(ltsOnly: Bool) throws -> [NodeDownloadCandidate] {
         [NodeDownloadCandidate(version: "24.15.0", lts: nil)]
     }
 
-    func installNode(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeInstallation {
+    func installNode(
+        version: String,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeInstallation {
+        receivedCancellations.append(cancellation)
         operations.append("install-node:\(version)")
         let normalized = NodeInstallationDetector.normalizeVersion(version) ?? version
         let installPath = "\(testManagedRuntimeRoot)/node/\(normalized)"
@@ -408,7 +434,12 @@ private final class MockInstaller: RuntimeComponentInstalling, @unchecked Sendab
         ]
     }
 
-    func installJava(featureVersion: Int, progress: (@Sendable (String) -> Void)?) throws -> JavaInstallation {
+    func installJava(
+        featureVersion: Int,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> JavaInstallation {
+        receivedCancellations.append(cancellation)
         operations.append("install-java:\(featureVersion)")
         let homePath = "\(testManagedRuntimeRoot)/java/temurin-\(featureVersion).jdk/Contents/Home"
         return JavaInstallation(version: "\(featureVersion).0.0", homePath: homePath)
@@ -428,7 +459,12 @@ private final class MockInstaller: RuntimeComponentInstalling, @unchecked Sendab
         ]
     }
 
-    func installPython(version: String, progress: (@Sendable (String) -> Void)?) throws -> PythonInstallation {
+    func installPython(
+        version: String,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> PythonInstallation {
+        receivedCancellations.append(cancellation)
         operations.append("install-python:\(version)")
         let homePath = "\(testManagedRuntimeRoot)/python/\(version)"
         return PythonInstallation(
@@ -448,7 +484,11 @@ private struct FailingInstaller: RuntimeComponentInstalling {
         throw RuntimeComponentInstallerError.runtimeDownloadFailed(url: "node", message: "download failed")
     }
 
-    func installNode(version: String, progress: (@Sendable (String) -> Void)?) throws -> NodeInstallation {
+    func installNode(
+        version: String,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> NodeInstallation {
         throw RuntimeComponentInstallerError.runtimeDownloadFailed(url: "node", message: "download failed")
     }
 
@@ -460,7 +500,11 @@ private struct FailingInstaller: RuntimeComponentInstalling {
         throw RuntimeComponentInstallerError.runtimeDownloadFailed(url: "java", message: "download failed")
     }
 
-    func installJava(featureVersion: Int, progress: (@Sendable (String) -> Void)?) throws -> JavaInstallation {
+    func installJava(
+        featureVersion: Int,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> JavaInstallation {
         throw RuntimeComponentInstallerError.runtimeDownloadFailed(url: "java", message: "download failed")
     }
 
@@ -472,7 +516,11 @@ private struct FailingInstaller: RuntimeComponentInstalling {
         throw RuntimeComponentInstallerError.runtimeDownloadFailed(url: "python", message: "download failed")
     }
 
-    func installPython(version: String, progress: (@Sendable (String) -> Void)?) throws -> PythonInstallation {
+    func installPython(
+        version: String,
+        cancellation: ShellCommandCancellation?,
+        progress: (@Sendable (String) -> Void)?
+    ) throws -> PythonInstallation {
         throw RuntimeComponentInstallerError.runtimeDownloadFailed(url: "python", message: "download failed")
     }
 

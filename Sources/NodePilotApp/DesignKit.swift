@@ -245,6 +245,72 @@ enum Metric {
     static let controlHeight: CGFloat = 30
 }
 
+// MARK: - Typography tokens
+
+/// 语义字号令牌。
+///
+/// 此前每个视图各写 `.font(.system(size: N))`，字号散成 8–22pt 九档；固定 pt 还有两个
+/// 问题：不随系统「更大字体」缩放，且同一层级在不同页面用不同值。这里统一映射到系统
+/// 语义样式——既拿回动态字号，也让「页面标题 / 分组标题 / 行标题 / 说明」在全 App 一致。
+///
+/// 选值依据：12pt 恰好等于 `.callout`，13pt 等于 `.body`，11pt 等于 `.subheadline`，
+/// 10pt 等于 `.caption`，9pt 等于 `.caption2`，所以迁移是等价的，不是重新设计。
+enum DesignType {
+    /// 页面标题（原 20pt）。
+    static let pageTitle = Font.system(.title2, weight: .semibold)
+    /// 分组/卡片标题（原 12pt 半粗）。
+    static let sectionTitle = Font.system(.callout, weight: .semibold)
+    /// 行标题（原 13–14pt 半粗）。
+    static let rowTitle = Font.system(.body, weight: .semibold)
+    /// 行内正文（原 13pt）。
+    static let bodyText = Font.system(.body)
+    /// 次要正文 / 说明（原 12pt）。
+    static let callout = Font.system(.callout)
+    /// 第三级说明（原 11pt）。
+    static let meta = Font.system(.subheadline)
+    /// 注释（原 10pt）。
+    static let caption = Font.system(.caption)
+    /// 最小一档（原 8–9pt），只用于图形或极短标签。
+    static let micro = Font.system(.caption2)
+    /// 行内版本号：等宽数字保证多行版本号对齐。
+    static let versionValue = Font.system(.title3, design: .rounded, weight: .semibold).monospacedDigit()
+    /// 概览页的大号版本号。
+    static let heroVersion = Font.system(.title2, design: .monospaced, weight: .semibold).monospacedDigit()
+    /// 等宽正文（路径、导出脚本）。
+    static let monoCaption = Font.system(.caption, design: .monospaced)
+    /// 状态胶囊等极小文字的粗体。
+    static let microBold = Font.system(.caption2, weight: .semibold)
+}
+
+enum DisplayPath {
+    static func short(_ path: String) -> String {
+        path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+    }
+}
+
+struct RuntimeFilterFocusKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+extension FocusedValues {
+    var runtimeFilterFocus: (() -> Void)? {
+        get { self[RuntimeFilterFocusKey.self] }
+        set { self[RuntimeFilterFocusKey.self] = newValue }
+    }
+}
+
+/// 由 `RootView` 发布、供「显示」菜单里的 ⌘1–⌘4 使用。
+struct SectionNavigationFocusKey: FocusedValueKey {
+    typealias Value = (AppSection) -> Void
+}
+
+extension FocusedValues {
+    var sectionNavigation: ((AppSection) -> Void)? {
+        get { self[SectionNavigationFocusKey.self] }
+        set { self[SectionNavigationFocusKey.self] = newValue }
+    }
+}
+
 // MARK: - Color tokens
 
 /// 页面灰阶。
@@ -287,9 +353,48 @@ enum DesignColor {
     static let hairline = adaptive(gray(0, alpha: 0.10), gray(1, alpha: 0.16))
 
     /// 强调色浅底。用于选中行与焦点状态。
-    static var selection: Color {
-        Color.accentColor.opacity(0.15)
-    }
+    /// 「提高对比度」下加深，否则这层 15% 的浅底在辅助功能场景里约等于看不见。
+    static let selection = Color(nsColor: NSColor(name: nil) { appearance in
+        NSColor.controlAccentColor.withAlphaComponent(isHighContrast(appearance) ? 0.34 : 0.15)
+    })
+
+    /// 可读的三级文本。系统 `.tertiary` 更适合装饰信息，不足以承载正文和状态说明。
+    static let tertiaryText = adaptive(gray(0.40), gray(0.70))
+
+    /// 主操作颜色从系统强调色读取，保留用户选择的 macOS 主题色。
+    static let primaryAction = Color(nsColor: NSColor(name: nil) { _ in
+        NSColor.controlAccentColor.usingColorSpace(.deviceRGB) ?? NSColor.controlAccentColor
+    })
+
+    /// 根据实际强调色的亮度选择黑或白，避免固定白字在亮色强调色上失去对比度。
+    static let onPrimaryAction = Color(nsColor: NSColor(name: nil) { _ in
+        guard let color = NSColor.controlAccentColor.usingColorSpace(.deviceRGB) else {
+            return .white
+        }
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        color.getRed(&red, green: &green, blue: &blue, alpha: nil)
+        let luminance = 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+        return luminance <= 0.179 ? .white : .black
+    })
+
+    static let statusPositive = adaptive(
+        NSColor(srgbRed: 0.06, green: 0.43, blue: 0.19, alpha: 1),
+        NSColor(srgbRed: 0.19, green: 0.82, blue: 0.35, alpha: 1)
+    )
+    static let statusWarning = adaptive(
+        NSColor(srgbRed: 0.58, green: 0.33, blue: 0.00, alpha: 1),
+        NSColor(srgbRed: 1.00, green: 0.62, blue: 0.04, alpha: 1)
+    )
+    static let statusNegative = adaptive(
+        NSColor(srgbRed: 0.68, green: 0.15, blue: 0.13, alpha: 1),
+        NSColor(srgbRed: 1.00, green: 0.41, blue: 0.38, alpha: 1)
+    )
+    static let statusInformative = adaptive(
+        NSColor(srgbRed: 0.03, green: 0.34, blue: 0.70, alpha: 1),
+        NSColor(srgbRed: 0.35, green: 0.69, blue: 1.00, alpha: 1)
+    )
 
     static var hairlineShape: some View {
         RoundedRectangle(cornerRadius: Metric.groupRadius, style: .continuous)
@@ -301,17 +406,137 @@ enum DesignColor {
         RoundedRectangle(cornerRadius: Metric.groupRadius, style: .continuous)
     }
 
-    /// 深浅色各给一档灰阶。
+    /// 深浅色 + 「提高对比度」共四种外观各给一档。
+    ///
+    /// 以前只匹配 `.aqua` / `.darkAqua`，`.accessibilityHighContrastAqua` 会被
+    /// `bestMatch` 归到普通浅色——系统打开「提高对比度」时整套令牌纹丝不动：卡片边界
+    /// 全靠 `hairline` 那条 10% 不透明度，凹槽、悬停、选中底色更淡。这里显式识别高对比
+    /// 外观，并让半透明填充加深、中性灰更极端。
     private static func adaptive(_ light: NSColor, _ dark: NSColor) -> Color {
         let color = NSColor(name: nil) { appearance in
-            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            return isDark ? dark : light
+            switch AppearanceAxis(appearance) {
+            case .light:
+                return light
+            case .dark:
+                return dark
+            case .lightHighContrast:
+                return boosted(light, isDark: false)
+            case .darkHighContrast:
+                return boosted(dark, isDark: true)
+            }
         }
         return Color(nsColor: color)
     }
 
+    /// 品牌 / 标识色。
+    ///
+    /// 以前这些色值是写死的 `Color(red:green:blue:)`：深浅色都给同一档，系统打开
+    /// 「提高对比度」时纹丝不动。这里从一个字面量派生四档——深色提亮、浅色高对比压深、
+    /// 深色高对比再提亮——色相不变，只在图标徽章上使用。
+    static func brandTint(red: Double, green: Double, blue: Double) -> Color {
+        let light = NSColor(srgbRed: red, green: green, blue: blue, alpha: 1)
+        let dark = shifted(red: red, green: green, blue: blue, delta: 0.16)
+        let lightHighContrast = shifted(red: red, green: green, blue: blue, delta: -0.12)
+        let darkHighContrast = shifted(red: red, green: green, blue: blue, delta: 0.30)
+        return Color(nsColor: NSColor(name: nil) { appearance in
+            switch AppearanceAxis(appearance) {
+            case .light:
+                return light
+            case .dark:
+                return dark
+            case .lightHighContrast:
+                return lightHighContrast
+            case .darkHighContrast:
+                return darkHighContrast
+            }
+        })
+    }
+
+    private static func shifted(red: Double, green: Double, blue: Double, delta: Double) -> NSColor {
+        NSColor(
+            srgbRed: min(1, max(0, red + delta)),
+            green: min(1, max(0, green + delta)),
+            blue: min(1, max(0, blue + delta)),
+            alpha: 1
+        )
+    }
+
+    /// 高对比变体：
+    /// - 半透明填充（描边、凹槽、悬停）加深不透明度，边界与层次才立得住；
+    /// - 中性灰往两端再推一档，次要文字更易读；
+    /// - 彩色（状态色、品牌色）保持原样，避免破坏语义与色相。
+    private static func boosted(_ color: NSColor, isDark: Bool) -> NSColor {
+        guard let rgb = color.usingColorSpace(.sRGB) else {
+            return color
+        }
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        rgb.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        if alpha < 1 {
+            return NSColor(srgbRed: red, green: green, blue: blue, alpha: min(1, alpha * 2.2 + 0.06))
+        }
+        let isNeutral = abs(red - green) < 0.02 && abs(green - blue) < 0.02
+        guard isNeutral else {
+            return color
+        }
+        let shifted = isDark ? min(1, red + 0.14) : max(0, red - 0.14)
+        return NSColor(srgbRed: shifted, green: shifted, blue: shifted, alpha: 1)
+    }
+
+    static func isHighContrast(_ appearance: NSAppearance) -> Bool {
+        switch AppearanceAxis(appearance) {
+        case .lightHighContrast, .darkHighContrast:
+            return true
+        case .light, .dark:
+            return false
+        }
+    }
+
     private static func gray(_ white: CGFloat, alpha: CGFloat = 1) -> NSColor {
         NSColor(white: white, alpha: alpha)
+    }
+
+    private static func linear(_ component: CGFloat) -> CGFloat {
+        let value = Double(component)
+        let linearValue = value <= 0.04045
+            ? value / 12.92
+            : pow((value + 0.055) / 1.055, 2.4)
+        return CGFloat(linearValue)
+    }
+}
+
+// MARK: - Appearance axis
+
+/// 把 `NSAppearance` 归到四个正交的档位。`bestMatch` 会按「与当前外观最接近」排序，
+/// 所以把高对比的名字一起放进候选列表就能准确区分，不需要逐个比较 appearance.name。
+enum AppearanceAxis {
+    case light
+    case dark
+    case lightHighContrast
+    case darkHighContrast
+
+    init(_ appearance: NSAppearance) {
+        switch appearance.bestMatch(from: [
+            .accessibilityHighContrastDarkAqua,
+            .accessibilityHighContrastAqua,
+            .darkAqua,
+            .aqua,
+        ]) {
+        case .accessibilityHighContrastDarkAqua:
+            self = .darkHighContrast
+        case .accessibilityHighContrastAqua:
+            self = .lightHighContrast
+        case .darkAqua:
+            self = .dark
+        default:
+            self = .light
+        }
+    }
+
+    var isDark: Bool {
+        self == .dark || self == .darkHighContrast
     }
 }
 
@@ -344,7 +569,9 @@ final class FlatTitleBarView: NSView {
         guard let window else {
             return
         }
+#if DEBUG
         PerfProbe.noteFlatten()
+#endif
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.titlebarSeparatorStyle = .none
@@ -386,11 +613,11 @@ struct PageHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
-                .font(.system(size: 20, weight: .semibold))
+                .font(.system(.title2, weight: .semibold))
                 .foregroundStyle(.primary)
 
             Text(subtitle)
-                .font(.system(size: 12))
+                .font(.system(.callout))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
@@ -439,11 +666,11 @@ enum AppButtonSize {
     var font: Font {
         switch self {
         case .regular:
-            return .system(size: 13, weight: .medium)
+            return .system(.body, weight: .medium)
         case .small:
-            return .system(size: 12, weight: .medium)
+            return .system(.callout, weight: .medium)
         case .mini:
-            return .system(size: 11, weight: .medium)
+            return .system(.subheadline, weight: .medium)
         }
     }
 
@@ -497,7 +724,11 @@ struct AppButtonStyle: ButtonStyle {
 
         @Environment(\.isEnabled) private var isEnabled
         @Environment(\.isFocused) private var isFocused
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @State private var isHovering = false
+        /// 固定 30/26/23pt 的高度在大字号下会把文字裁掉；用 1 为基数的缩放系数
+        /// 让最小高度跟着文字一起长。
+        @ScaledMetric(relativeTo: .body) private var heightScale: CGFloat = 1
 
         var body: some View {
             configuration.label
@@ -505,11 +736,11 @@ struct AppButtonStyle: ButtonStyle {
                 .foregroundStyle(foregroundStyle)
                 .padding(.horizontal, size.horizontalPadding)
                 .padding(.vertical, size.verticalPadding)
-                .frame(minHeight: size.minHeight)
+                .frame(minHeight: size.minHeight * heightScale)
                 .background(backgroundStyle, in: shape)
                 .overlay {
                     shape.strokeBorder(
-                        isFocused ? Color.accentColor.opacity(0.92) : borderColor,
+                        isFocused ? DesignColor.primaryAction.opacity(0.92) : borderColor,
                         lineWidth: isFocused ? 2 : borderWidth
                     )
                 }
@@ -517,11 +748,15 @@ struct AppButtonStyle: ButtonStyle {
                 .opacity(isEnabled ? (configuration.isPressed ? 0.76 : 1) : 0.46)
                 .scaleEffect(configuration.isPressed ? 0.985 : 1)
                 .onHover { hovering in
-                    withAnimation(.easeOut(duration: 0.12)) {
+                    if reduceMotion {
                         isHovering = hovering
+                    } else {
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            isHovering = hovering
+                        }
                     }
                 }
-                .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
         }
 
         private var shape: RoundedRectangle {
@@ -531,7 +766,7 @@ struct AppButtonStyle: ButtonStyle {
         private var foregroundStyle: Color {
             switch variant {
             case .primary:
-                return .white
+                return DesignColor.onPrimaryAction
             case .secondary:
                 return .primary
             case .quiet:
@@ -544,26 +779,26 @@ struct AppButtonStyle: ButtonStyle {
         private var backgroundStyle: Color {
             switch variant {
             case .primary:
-                return .accentColor
+                return DesignColor.primaryAction
             case .secondary:
                 return isHovering ? DesignColor.hover : DesignColor.control
             case .quiet:
                 return isHovering ? DesignColor.hover : .clear
             case .destructive:
-                return Color.red.opacity(isHovering ? 0.14 : 0.10)
+                return DesignColor.statusNegative.opacity(isHovering ? 0.14 : 0.10)
             }
         }
 
         private var borderColor: Color {
             switch variant {
             case .primary:
-                return Color.white.opacity(0.12)
+                return DesignColor.onPrimaryAction.opacity(0.18)
             case .secondary:
                 return DesignColor.hairline
             case .quiet:
                 return .clear
             case .destructive:
-                return Color.red.opacity(0.20)
+                return DesignColor.statusNegative.opacity(0.20)
             }
         }
 
@@ -594,17 +829,18 @@ struct AppIconButtonStyle: ButtonStyle {
 
         @Environment(\.isEnabled) private var isEnabled
         @Environment(\.isFocused) private var isFocused
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @State private var isHovering = false
 
         var body: some View {
             configuration.label
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(.callout, weight: .medium))
                 .foregroundStyle(isHovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                 .frame(width: size, height: size)
                 .background(backgroundStyle, in: shape)
                 .overlay {
                     if isFocused {
-                        shape.strokeBorder(Color.accentColor.opacity(0.92), lineWidth: 2)
+                        shape.strokeBorder(DesignColor.primaryAction.opacity(0.92), lineWidth: 2)
                     } else if variant == .secondary {
                         shape.strokeBorder(DesignColor.hairline, lineWidth: 1)
                     }
@@ -613,8 +849,12 @@ struct AppIconButtonStyle: ButtonStyle {
                 .opacity(isEnabled ? (configuration.isPressed ? 0.72 : 1) : 0.42)
                 .scaleEffect(configuration.isPressed ? 0.97 : 1)
                 .onHover { hovering in
-                    withAnimation(.easeOut(duration: 0.12)) {
+                    if reduceMotion {
                         isHovering = hovering
+                    } else {
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            isHovering = hovering
+                        }
                     }
                 }
         }
@@ -660,7 +900,7 @@ struct SectionHeader: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             if let title {
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(.callout, weight: .semibold))
                     .foregroundStyle(.primary)
             }
 
@@ -770,6 +1010,7 @@ struct DisclosureRow<Content: View>: View {
     var accessory: AnyView?
     @Binding var isExpanded: Bool
     @ViewBuilder var content: Content
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(
         title: String,
@@ -791,46 +1032,55 @@ struct DisclosureRow<Content: View>: View {
         VStack(spacing: 0) {
             GroupRow {
                 HStack(spacing: 10) {
-                    if let symbol {
-                        Image(systemName: symbol)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 18)
-                    }
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(title)
-                            .font(.callout)
-                        if let subtitle {
-                            Text(subtitle)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
+                    Button {
+                        if reduceMotion {
+                            isExpanded.toggle()
+                        } else {
+                            withAnimation(.snappy(duration: 0.18)) {
+                                isExpanded.toggle()
+                            }
                         }
-                    }
+                    } label: {
+                        HStack(spacing: 10) {
+                            if let symbol {
+                                Image(systemName: symbol)
+                                    .font(.system(.callout, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 18)
+                                    .accessibilityHidden(true)
+                            }
 
-                    Spacer(minLength: 8)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(title)
+                                    .font(.callout)
+                                if let subtitle {
+                                    Text(subtitle)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                            }
+
+                            Spacer(minLength: 8)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(title)
+                    .accessibilityHint(isExpanded ? "收起详情" : "展开详情")
 
                     if let accessory {
                         accessory
                     }
 
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.tertiary)
+                        .font(.system(.caption, weight: .semibold))
+                        .foregroundStyle(DesignColor.tertiaryText)
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
                         .frame(width: 12)
+                        .accessibilityHidden(true)
                 }
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    withAnimation(.snappy(duration: 0.18)) {
-                        isExpanded.toggle()
-                    }
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(.isButton)
-                .accessibilityLabel(title)
             }
 
             if isExpanded {
@@ -874,11 +1124,11 @@ extension RuntimeKind {
     var tint: Color {
         switch self {
         case .node:
-            return Color(red: 0.24, green: 0.66, blue: 0.40)
+            return DesignColor.brandTint(red: 0.24, green: 0.66, blue: 0.40)
         case .java:
-            return Color(red: 0.86, green: 0.49, blue: 0.16)
+            return DesignColor.brandTint(red: 0.86, green: 0.49, blue: 0.16)
         case .python:
-            return Color(red: 0.26, green: 0.51, blue: 0.82)
+            return DesignColor.brandTint(red: 0.26, green: 0.51, blue: 0.82)
         }
     }
 }
@@ -888,6 +1138,8 @@ struct RuntimeBadge: View {
     let kind: RuntimeKind
     var size: CGFloat = Metric.badgeSize
     var isActive = true
+    /// 徽章本身是固定边长，但里面的字形要跟着文字一起放大，否则大字号下表意图标不变。
+    @ScaledMetric(relativeTo: .body) private var glyphScale: CGFloat = 1
 
     var body: some View {
         RoundedRectangle(cornerRadius: size * 0.29, style: .continuous)
@@ -895,8 +1147,9 @@ struct RuntimeBadge: View {
             .frame(width: size, height: size)
             .overlay {
                 Image(systemName: kind.symbol)
-                    .font(.system(size: size * 0.46, weight: .semibold))
+                    .font(.system(size: size * 0.46 * glyphScale, weight: .semibold))
                     .foregroundStyle(isActive ? AnyShapeStyle(kind.tint) : AnyShapeStyle(.tertiary))
+                    .accessibilityHidden(true)
             }
             .accessibilityHidden(true)
     }
@@ -912,6 +1165,7 @@ struct RuntimeBadge: View {
 struct SearchField: NSViewRepresentable {
     @Binding var text: String
     var placeholder: String = ""
+    var focusToken: Int = 0
 
     func makeCoordinator() -> Coordinator {
         Coordinator(binding: $text)
@@ -920,7 +1174,7 @@ struct SearchField: NSViewRepresentable {
     func makeNSView(context: Context) -> NSSearchField {
         let field = NSSearchField()
         field.delegate = context.coordinator
-        field.focusRingType = .none
+        field.focusRingType = .default
         field.usesSingleLineMode = true
         field.sendsSearchStringImmediately = true
         field.sendsWholeSearchString = false
@@ -932,11 +1186,18 @@ struct SearchField: NSViewRepresentable {
             nsView.stringValue = text
         }
         nsView.placeholderString = placeholder
+        if context.coordinator.focusToken != focusToken {
+            context.coordinator.focusToken = focusToken
+            DispatchQueue.main.async {
+                nsView.window?.makeFirstResponder(nsView)
+            }
+        }
     }
 
     @MainActor
     final class Coordinator: NSObject, NSSearchFieldDelegate {
         private let text: Binding<String>
+        var focusToken = 0
 
         init(binding: Binding<String>) {
             self.text = binding
@@ -956,7 +1217,7 @@ struct SearchField: NSViewRepresentable {
 extension View {
     /// 行内版本号：等宽数字保证多行版本号对齐，单色不靠颜色区分运行时。
     func rowVersionFont() -> some View {
-        font(.system(size: 14, weight: .semibold, design: .rounded).monospacedDigit())
+        font(DesignType.versionValue)
     }
 }
 
@@ -973,15 +1234,17 @@ struct Pill: View {
         var color: Color {
             switch self {
             case .neutral:
-                return .secondary
+                // 中性胶囊原来是 `.secondary` 文字叠 `.secondary` 12% 底色，
+                // 约 4.0:1——对 `caption2`（≈10pt）小字不够。文字改用主色降一档。
+                return Color.primary.opacity(0.78)
             case .positive:
-                return .green
+                return DesignColor.statusPositive
             case .warning:
-                return .orange
+                return DesignColor.statusWarning
             case .negative:
-                return .red
+                return DesignColor.statusNegative
             case .informative:
-                return .blue
+                return DesignColor.statusInformative
             }
         }
     }
@@ -1000,7 +1263,8 @@ struct Pill: View {
         HStack(spacing: 3) {
             if let symbol {
                 Image(systemName: symbol)
-                    .font(.system(size: 8, weight: .bold))
+                    .font(.system(.caption2, weight: .bold))
+                    .accessibilityHidden(true)
             }
             Text(text)
         }
@@ -1049,8 +1313,9 @@ struct EmptyState<Actions: View>: View {
     var body: some View {
         VStack(spacing: 9) {
             Image(systemName: symbol)
-                .font(.system(size: 22, weight: .regular))
-                .foregroundStyle(.tertiary)
+                .font(.system(.title, weight: .regular))
+                .foregroundStyle(DesignColor.tertiaryText)
+                .accessibilityHidden(true)
 
             Text(title)
                 .font(.callout.weight(.medium))
@@ -1059,7 +1324,7 @@ struct EmptyState<Actions: View>: View {
             if let message {
                 Text(message)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DesignColor.tertiaryText)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1081,8 +1346,9 @@ struct InlineHint: View {
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
             Image(systemName: symbol)
-                .font(.system(size: 12))
-                .foregroundStyle(.tertiary)
+                .font(.system(.callout))
+                .foregroundStyle(DesignColor.tertiaryText)
+                .accessibilityHidden(true)
             Text(text)
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -1105,7 +1371,7 @@ struct ValueRow: View {
             Text(label)
                 .font(.callout)
                 .foregroundStyle(.secondary)
-                .frame(width: 108, alignment: .leading)
+                .frame(minWidth: 108, alignment: .leading)
 
             Text(value)
                 .font(.caption.monospaced())
@@ -1128,7 +1394,7 @@ struct ValueRow: View {
                 Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
             }
             .appIconButton(size: 24)
-            .help(didCopy ? "已复制" : "复制")
+            .help(copyHelp)
             .accessibilityLabel(didCopy ? "已复制 \(label)" : "复制\(label)")
             .disabled(!value.hasPrefix("/"))
 
@@ -1138,7 +1404,7 @@ struct ValueRow: View {
                 Image(systemName: "folder")
             }
             .appIconButton(size: 24)
-            .help("在 Finder 中显示")
+            .help(pathExists ? "在 Finder 中显示" : "\(label) 不存在")
             .accessibilityLabel("在 Finder 中显示\(label)")
             .disabled(!pathExists)
         }
@@ -1147,6 +1413,13 @@ struct ValueRow: View {
 
     private var pathExists: Bool {
         value.hasPrefix("/") && FileManager.default.fileExists(atPath: value)
+    }
+
+    private var copyHelp: String {
+        if didCopy {
+            return "已复制"
+        }
+        return value.hasPrefix("/") ? "复制" : "没有可复制的路径"
     }
 }
 
@@ -1167,6 +1440,8 @@ struct SelectableRowStyle: ButtonStyle {
         let configuration: ButtonStyleConfiguration
         let isSelected: Bool
 
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        @Environment(\.isFocused) private var isFocused
         @State private var isHovering = false
 
         var body: some View {
@@ -1175,11 +1450,24 @@ struct SelectableRowStyle: ButtonStyle {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(fill)
                 )
+                .overlay {
+                    // 键盘导航时必须看得见焦点：这条路径以前完全没有焦点环，
+                    // 用 Tab 走侧边栏等于闭着眼睛点。
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(
+                            isFocused ? DesignColor.primaryAction.opacity(0.92) : .clear,
+                            lineWidth: 2
+                        )
+                }
                 .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .opacity(configuration.isPressed ? 0.72 : 1)
                 .onHover { hovering in
-                    withAnimation(.easeOut(duration: 0.12)) {
+                    if reduceMotion {
                         isHovering = hovering
+                    } else {
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            isHovering = hovering
+                        }
                     }
                 }
         }
@@ -1189,6 +1477,57 @@ struct SelectableRowStyle: ButtonStyle {
                 return DesignColor.selection
             }
             return isHovering ? DesignColor.hover : Color.clear
+        }
+    }
+}
+
+// MARK: - Status banner
+
+/// 顶部错误横幅。
+///
+/// 失败信息以前只出现在窗口**底部**的状态栏里：窗口一被拖到屏幕底部边缘，那一条就被
+/// 挡住了（HIG 明确不建议把关键信息放在底栏）。失败改用顶栏横幅，紧贴页面标题，
+/// 成功/提示这类瞬时信息仍留在底部。
+struct StatusBanner: View {
+    let text: String
+    var onDismiss: (() -> Void)?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(DesignType.caption)
+                .foregroundStyle(DesignColor.statusNegative)
+                .accessibilityHidden(true)
+
+            Text(text)
+                .font(DesignType.caption)
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel("错误：\(text)")
+
+            Spacer(minLength: 8)
+
+            if let onDismiss {
+                Button {
+                    onDismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .appIconButton(size: 22)
+                .help("关闭错误提示")
+                .accessibilityLabel("关闭错误提示")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(maxWidth: Metric.pageMaxWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .background(DesignColor.statusNegative.opacity(0.10))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(DesignColor.statusNegative.opacity(0.35))
+                .frame(height: 1)
         }
     }
 }
@@ -1211,20 +1550,26 @@ struct StatusBar: View {
             switch tone {
             case .idle:
                 Image(systemName: "circle")
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DesignColor.tertiaryText)
+                    .accessibilityHidden(true)
             case .notice:
                 Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(DesignColor.statusPositive)
+                    .accessibilityHidden(true)
             case .error:
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red)
+                    .foregroundStyle(DesignColor.statusNegative)
+                    .accessibilityHidden(true)
             }
 
             Text(text)
-                .font(.caption)
+                .font(DesignType.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .textSelection(.enabled)
+                // 语气由图标表达、朗读由这句承担：容器上再挂 label 会和 `.contain`
+                // 冲突（既读容器又读子元素），也会把底部的关闭按钮裹进去。
+                .accessibilityLabel("状态提示：\(text)")
 
             Spacer(minLength: 8)
 
@@ -1236,6 +1581,7 @@ struct StatusBar: View {
                 }
                 .appIconButton(size: 24)
                 .help("关闭提示")
+                .accessibilityLabel("关闭状态提示")
             }
         }
         .padding(.horizontal, 14)
@@ -1244,5 +1590,6 @@ struct StatusBar: View {
         .overlay(alignment: .top) {
             Divider()
         }
+        .accessibilityElement(children: .contain)
     }
 }

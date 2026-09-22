@@ -110,6 +110,11 @@ public struct PackageManagerStatus: Identifiable, Equatable, Sendable {
     public let latestVersion: String?
     public let installMethod: PackageManagerInstallMethod
     public let errorMessage: String?
+    /// 操作成功后需要额外告知用户的副作用（目前只有「原独立安装被移到废纸篓」）。
+    ///
+    /// 单独一个字段而不是塞进 `errorMessage`：这不是错误，App 层可以把它追加在成功
+    /// 提示后面，用户才不会以为自己是「凭空」发现 `~/.local/bin/pnpm` 不见了。
+    public var cleanupNotice: String?
 
     public init(
         kind: PackageManagerKind,
@@ -118,7 +123,8 @@ public struct PackageManagerStatus: Identifiable, Equatable, Sendable {
         currentVersion: String? = nil,
         latestVersion: String? = nil,
         installMethod: PackageManagerInstallMethod = .unknown,
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        cleanupNotice: String? = nil
     ) {
         self.kind = kind
         self.executablePath = executablePath
@@ -127,6 +133,7 @@ public struct PackageManagerStatus: Identifiable, Equatable, Sendable {
         self.latestVersion = latestVersion
         self.installMethod = installMethod
         self.errorMessage = errorMessage
+        self.cleanupNotice = cleanupNotice
     }
 
     public var id: String { kind.rawValue }
@@ -327,7 +334,8 @@ public struct LocalPackageManagerService: PackageManagerServicing, Sendable {
         progress: (@Sendable (AIEnvironmentUpdateStage) -> Void)? = nil
     ) async throws -> PackageManagerStatus {
         progress?(.connecting)
-        let current = await status(for: kind)
+        let detection = DetectionCache()
+        let current = await status(for: kind, cache: detection)
         guard !current.isInstalled else {
             return current
         }
@@ -335,27 +343,30 @@ public struct LocalPackageManagerService: PackageManagerServicing, Sendable {
         progress?(.fetchingPackage)
         let plan = Self.installPlan(for: kind)
         progress?(.installing)
+        let stageProgress = StageDeduplicator(progress: progress)
         let result = try shellRunner.runShell(
-            "\(shellPreamble)\nexec \(plan.command)",
+            // 这里不能再加 `exec`：安装计划已经是「下载→校验→执行→清理」的多行脚本，
+            // `exec` 只接得住单个简单命令。去掉它也不影响取消——取消现在杀的是整棵
+            // 进程树，退出码仍由脚本最后一条命令决定。
+            "\(shellPreamble)\n\(plan.command)",
             environment: environmentWithMirror(for: kind),
             cancellation: cancellation,
-            onOutput: { output in
-                guard let stage = Self.updateStage(from: output) else {
-                    return
-                }
-                progress?(stage)
-            }
+            onOutput: { stageProgress.emit(from: $0) }
         )
         try validate(result, cancellation: cancellation, plan: plan, isUpdate: false)
 
         progress?(.verifying)
-        let updated = await status(for: kind)
-        Self.removeStandaloneInstallation(
+        // 安装命令会把可执行文件写到新目录，路径表必须重算；最新版本沿用操作开始时
+        // 查到的那一次，不为同一个 kind 再打一遍网络请求。
+        detection.invalidateExecutablePaths()
+        var updated = await status(for: kind, cache: detection)
+        let trashed = Self.removeStandaloneInstallation(
             for: kind,
             currentPath: current.executablePath,
             managedPath: updated.executablePath,
             home: Self.nonEmpty(environment["HOME"]) ?? NSHomeDirectory()
         )
+        updated.cleanupNotice = Self.cleanupNotice(forTrashedPaths: trashed)
         return updated
     }
 
@@ -369,6 +380,10 @@ public struct LocalPackageManagerService: PackageManagerServicing, Sendable {
         }
 
         progress?(.connecting)
+        let detection = DetectionCache()
+        // 切换前先看一眼当前可执行文件是谁：切换成功后要把它（以及同名伴随命令）
+        // 从独立安装目录移到废纸篓，否则 `~/.local/bin/pnpm` 会继续在 PATH 里抢先。
+        let current = await status(for: kind, cache: detection)
         let selectedNodePath = try? ConfigStore().load().selectedNodePath
         let managedNPMPath = managedNPMPath(selectedNodePath: selectedNodePath)
         let plan = try Self.switchToEnvPilotPlan(
@@ -379,24 +394,30 @@ public struct LocalPackageManagerService: PackageManagerServicing, Sendable {
         progress?(.installing)
 
         let preamble = managedNPMPath.map(commandPreamble(for:)) ?? shellPreamble
+        let stageProgress = StageDeduplicator(progress: progress)
         let result = try shellRunner.runShell(
+            // 同 `install`：计划是可能含下载校验的多行脚本，不能再用 `exec`。
             """
             \(preamble)
-            exec \(plan.command)
+            \(plan.command)
             """,
             environment: environmentWithMirror(for: kind),
             cancellation: cancellation,
-            onOutput: { output in
-                guard let stage = Self.updateStage(from: output) else {
-                    return
-                }
-                progress?(stage)
-            }
+            onOutput: { stageProgress.emit(from: $0) }
         )
         try validate(result, cancellation: cancellation, plan: plan, isUpdate: false)
 
         progress?(.verifying)
-        return await status(for: kind)
+        detection.invalidateExecutablePaths()
+        var updated = await status(for: kind, cache: detection)
+        let trashed = Self.removeStandaloneInstallation(
+            for: kind,
+            currentPath: current.executablePath,
+            managedPath: updated.executablePath,
+            home: Self.nonEmpty(environment["HOME"]) ?? NSHomeDirectory()
+        )
+        updated.cleanupNotice = Self.cleanupNotice(forTrashedPaths: trashed)
+        return updated
     }
 
     public func update(
@@ -405,7 +426,8 @@ public struct LocalPackageManagerService: PackageManagerServicing, Sendable {
         progress: (@Sendable (AIEnvironmentUpdateStage) -> Void)? = nil
     ) async throws -> PackageManagerStatus {
         progress?(.connecting)
-        let current = await status(for: kind)
+        let detection = DetectionCache()
+        let current = await status(for: kind, cache: detection)
         guard current.isInstalled else {
             throw PackageManagerServiceError.executableNotFound(kind)
         }
@@ -417,42 +439,49 @@ public struct LocalPackageManagerService: PackageManagerServicing, Sendable {
         )
         let executablePath = current.executablePath ?? kind.executableName
         progress?(.installing)
+        let stageProgress = StageDeduplicator(progress: progress)
         let result = try shellRunner.runShell(
             """
             \(commandPreamble(for: executablePath))
-            exec \(plan.command)
+            \(plan.command)
             """,
             environment: environmentWithMirror(for: kind),
             cancellation: cancellation,
-            onOutput: { output in
-                guard let stage = Self.updateStage(from: output) else {
-                    return
-                }
-                progress?(stage)
-            }
+            onOutput: { stageProgress.emit(from: $0) }
         )
         try validate(result, cancellation: cancellation, plan: plan, isUpdate: true)
 
         progress?(.verifying)
-        return await status(for: kind)
+        // 更新是原地替换，可执行文件路径不会变，直接复用操作开始时的解析结果，
+        // 省掉一次 `zsh -lc command -v` + 目录扫描和一次「最新版本」请求。
+        return await status(for: kind, cache: detection)
     }
 
     // MARK: Detection
 
+    /// 单次查询：只为这一个 kind 解析一次路径（保持原有行为，不引入跨查询缓存）。
     func status(for kind: PackageManagerKind) async -> PackageManagerStatus {
         await status(for: kind, executablePath: resolveExecutablePaths()[kind])
     }
 
+    /// 用调用方已经探测好的路径算状态。`latestVersion` 仍按需请求一次，不做缓存。
     private func status(
         for kind: PackageManagerKind,
         executablePath: String?
     ) async -> PackageManagerStatus {
+        let cache = DetectionCache()
+        cache.storeExecutablePaths(executablePath.map { [kind: $0] } ?? [:])
+        return await status(for: kind, cache: cache)
+    }
+
+    /// 一次操作内共享探测结果的版本：同一份路径表、同一次「最新版本」请求。
+    private func status(
+        for kind: PackageManagerKind,
+        cache: DetectionCache
+    ) async -> PackageManagerStatus {
         let registryURL = packageManagerRegistryURL(for: kind)
-        guard let executablePath else {
-            let latestVersion = try? await latestVersionProvider.latestVersion(
-                for: kind,
-                registryURL: registryURL
-            )
+        guard let executablePath = resolvedExecutablePaths(cache: cache)[kind] else {
+            let latestVersion = await latestVersion(for: kind, registryURL: registryURL, cache: cache)
             return PackageManagerStatus(kind: kind, latestVersion: latestVersion)
         }
 
@@ -460,10 +489,7 @@ public struct LocalPackageManagerService: PackageManagerServicing, Sendable {
         let installMethod = Self.installMethod(for: kind, resolvedPath: resolvedPath)
         let versionOutput = runVersionCommand(executablePath: executablePath)
         let currentVersion = Self.version(from: versionOutput.combinedOutput)
-        let latestVersion = try? await latestVersionProvider.latestVersion(
-            for: kind,
-            registryURL: registryURL
-        )
+        let latestVersion = await latestVersion(for: kind, registryURL: registryURL, cache: cache)
 
         let errorMessage: String?
         if currentVersion == nil {
@@ -483,6 +509,34 @@ public struct LocalPackageManagerService: PackageManagerServicing, Sendable {
             installMethod: installMethod,
             errorMessage: errorMessage
         )
+    }
+
+    /// 路径表只在第一次需要时解析，之后整次操作复用。
+    private func resolvedExecutablePaths(cache: DetectionCache) -> [PackageManagerKind: String] {
+        if let cached = cache.cachedExecutablePaths() {
+            return cached
+        }
+        let paths = resolveExecutablePaths()
+        cache.storeExecutablePaths(paths)
+        return paths
+    }
+
+    /// 「最新版本」整个操作只查一次：同一个版本在操作前后不会有意义地变化。
+    private func latestVersion(
+        for kind: PackageManagerKind,
+        registryURL: URL?,
+        cache: DetectionCache
+    ) async -> String? {
+        let cached = cache.cachedLatestVersion(for: kind)
+        if cached.found {
+            return cached.value
+        }
+        let version = (try? await latestVersionProvider.latestVersion(
+            for: kind,
+            registryURL: registryURL
+        )) ?? nil
+        cache.storeLatestVersion(version, for: kind)
+        return version
     }
 
     private func resolveExecutablePaths() -> [PackageManagerKind: String] {
@@ -597,26 +651,43 @@ public struct LocalPackageManagerService: PackageManagerServicing, Sendable {
     static func installPlan(for kind: PackageManagerKind) -> ActionPlan {
         switch kind {
         case .npm:
-            return ActionPlan(
-                command: "curl -qL https://www.npmjs.com/install.sh | sh",
-                displayCommand: "curl -qL https://www.npmjs.com/install.sh | sh"
-            )
+            return remoteScriptPlan(url: "https://www.npmjs.com/install.sh")
         case .pnpm:
-            return ActionPlan(
-                command: "curl -fsSL https://get.pnpm.io/install.sh | sh -",
-                displayCommand: "curl -fsSL https://get.pnpm.io/install.sh | sh -"
-            )
+            return remoteScriptPlan(url: "https://get.pnpm.io/install.sh")
         case .homebrew:
-            return ActionPlan(
-                command: #"env NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)""#,
-                displayCommand: "Homebrew 官方安装脚本"
+            // Homebrew 官方脚本必须用 /bin/bash 跑；NONINTERACTIVE=1 关掉所有交互提问。
+            return remoteScriptPlan(
+                url: "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh",
+                interpreter: "/bin/bash",
+                environment: ["NONINTERACTIVE=1"]
             )
         case .uv:
-            return ActionPlan(
-                command: "curl -LsSf https://astral.sh/uv/install.sh | sh",
-                displayCommand: "curl -LsSf https://astral.sh/uv/install.sh | sh"
-            )
+            return remoteScriptPlan(url: "https://astral.sh/uv/install.sh")
         }
+    }
+
+    /// 远程安装脚本的统一执行方式：先下载到临时文件、确认内容像脚本，再交给解释器执行。
+    ///
+    /// 以前是 `curl ... | sh`：HTTP 层拿到的错误页会被当成脚本直接执行（npm 那条连 `-f`
+    /// 都没有）。这些 URL 全是 `latest`/`HEAD` 引用，上游内容随时变，无法固定 SHA 校验；
+    /// 这里能给出的保证是「下载完整、且内容确实是一段脚本之后，才执行任何东西」。
+    static func remoteScriptPlan(
+        url: String,
+        interpreter: String = "sh",
+        environment: [String] = []
+    ) -> ActionPlan {
+        let prefix = environment.isEmpty ? "" : "env " + environment.joined(separator: " ") + " "
+        return ActionPlan(
+            command: """
+            installer="$(mktemp -t envpilot-installer)"
+            trap 'rm -f "$installer"' EXIT
+            curl -fsSL \(singleQuoted(url)) -o "$installer" || exit 1
+            [ -s "$installer" ] || { echo "ENVPilot: 安装脚本下载为空" >&2; exit 1; }
+            head -c 2 "$installer" | grep -q '#!' || { echo "ENVPilot: 下载内容不是脚本" >&2; exit 1; }
+            \(prefix)\(interpreter) "$installer"
+            """,
+            displayCommand: "curl -fsSL \(url) -o <临时文件> && \(prefix)\(interpreter) <临时文件>"
+        )
     }
 
     static func switchToEnvPilotPlan(
@@ -633,9 +704,13 @@ public struct LocalPackageManagerService: PackageManagerServicing, Sendable {
                 displayCommand: "npm install -g pnpm@latest"
             )
         case .uv:
-            return ActionPlan(
-                command: #"env UV_INSTALL_DIR="$HOME/.envpilot/tools" UV_NO_MODIFY_PATH=1 sh -c "$(curl -fsSL https://astral.sh/uv/install.sh)""#,
-                displayCommand: "将 uv 最新版安装到 ENVPilot 目录"
+            // uv 官方脚本同样先落盘再执行；UV_INSTALL_DIR 让它装进 ENVPilot 私有目录。
+            return remoteScriptPlan(
+                url: "https://astral.sh/uv/install.sh",
+                environment: [
+                    #"UV_INSTALL_DIR="$HOME/.envpilot/tools""#,
+                    "UV_NO_MODIFY_PATH=1",
+                ]
             )
         case .npm, .homebrew:
             throw PackageManagerServiceError.switchUnsupported(kind)
@@ -910,15 +985,21 @@ public struct LocalPackageManagerService: PackageManagerServicing, Sendable {
         return String(output[range])
     }
 
+    /// 把 `kind` 在独立安装目录里的伴随二进制移到废纸篓，返回实际处理的路径。
+    ///
+    /// 以前是 `try? fileManager.removeItem`：错误被吞掉，用户也完全不知道自己的
+    /// `pnpm`/`uvx` 被删了。现在优先移到「废纸篓」（用户可恢复），并把移走的路径返回给
+    /// 调用方拼进成功提示里。
+    @discardableResult
     static func removeStandaloneInstallation(
         for kind: PackageManagerKind,
         currentPath: String?,
         managedPath: String?,
         home: String,
         fileManager: FileManager = .default
-    ) {
+    ) -> [String] {
         guard let currentPath, let managedPath, currentPath != managedPath else {
-            return
+            return []
         }
 
         let homeURL = URL(fileURLWithPath: home, isDirectory: true).standardizedFileURL
@@ -928,7 +1009,7 @@ public struct LocalPackageManagerService: PackageManagerServicing, Sendable {
             homeURL.appendingPathComponent(".cargo/bin", isDirectory: true).standardizedFileURL.path,
         ]
         guard standaloneDirectories.contains(currentURL.deletingLastPathComponent().path) else {
-            return
+            return []
         }
 
         let companionNames: [String]
@@ -938,16 +1019,36 @@ public struct LocalPackageManagerService: PackageManagerServicing, Sendable {
         case .uv:
             companionNames = ["uv", "uvx"]
         case .npm, .homebrew:
-            return
+            return []
         }
 
+        var trashed: [String] = []
         for name in companionNames {
             let path = currentURL.deletingLastPathComponent().appendingPathComponent(name)
             guard fileManager.fileExists(atPath: path.path) else {
                 continue
             }
-            try? fileManager.removeItem(at: path)
+            do {
+                try fileManager.trashItem(at: path, resultingItemURL: nil)
+                trashed.append(path.path)
+            } catch {
+                // 没有可用废纸篓（外置卷、无 GUI 会话）时退化为删除：
+                // 否则「切换到 ENVPilot 安装」会留下两个同名命令，反而更糟。
+                if (try? fileManager.removeItem(at: path)) != nil {
+                    trashed.append(path.path)
+                }
+            }
         }
+        return trashed
+    }
+
+    /// 把「旧独立安装被移到废纸篓」变成一句用户能看到的补充说明。
+    static func cleanupNotice(forTrashedPaths paths: [String]) -> String? {
+        guard !paths.isEmpty else {
+            return nil
+        }
+        let names = paths.map { URL(fileURLWithPath: $0).lastPathComponent }
+        return "原独立安装已移到废纸篓：\(names.joined(separator: "、"))。"
     }
 
     private func canonicalPath(_ path: String) -> String {
@@ -1001,5 +1102,86 @@ private extension ShellCommandResult {
         [standardOutput, standardError]
             .filter { !$0.isEmpty }
             .joined(separator: "\n")
+    }
+}
+
+/// 一次用户操作内的探测缓存。
+///
+/// `install` / `update` / `switchToEnvPilot` 以前在操作前后各调一次 `status(for:)`，
+/// 每次都要重新跑 `zsh -lc command -v`、读配置、列目录，并为同一个 kind 再打一遍
+/// 「最新版本」网络请求。把路径表和已经查到的最新版本在操作开始时算一次、之后复用，
+/// 一次操作就只剩一次全量探测。
+///
+/// 操作本身是顺序执行的，用锁只是为了让这个 `@Sendable` 世界里的小盒子无懈可击。
+private final class DetectionCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var executablePaths: [PackageManagerKind: String]?
+    /// 值类型是 `String?`：`nil` 表示「查过但上游没有版本」，所以另用集合标记是否查过。
+    private var latestVersions: [PackageManagerKind: String?] = [:]
+    private var queriedLatestVersions: Set<PackageManagerKind> = []
+
+    func cachedExecutablePaths() -> [PackageManagerKind: String]? {
+        lock.lock()
+        defer { lock.unlock() }
+        return executablePaths
+    }
+
+    func storeExecutablePaths(_ paths: [PackageManagerKind: String]) {
+        lock.lock()
+        executablePaths = paths
+        lock.unlock()
+    }
+
+    /// 安装/切换命令会改变磁盘上的可执行文件，重算前必须作废旧路径表。
+    func invalidateExecutablePaths() {
+        lock.lock()
+        executablePaths = nil
+        lock.unlock()
+    }
+
+    func cachedLatestVersion(for kind: PackageManagerKind) -> (found: Bool, value: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard queriedLatestVersions.contains(kind) else {
+            return (false, nil)
+        }
+        return (true, latestVersions[kind] ?? nil)
+    }
+
+    func storeLatestVersion(_ version: String?, for kind: PackageManagerKind) {
+        lock.lock()
+        queriedLatestVersions.insert(kind)
+        latestVersions[kind] = version
+        lock.unlock()
+    }
+}
+
+/// 输出去重器。
+///
+/// `brew install` / `npm install` 会打出成百上千行，`updateStage(from:)` 对同一阶段
+/// 反复命中；以前每一行都会回调 `progress`，App 层再为每一行跳一次主线程。这里只在
+/// 阶段真正变化时上报。闭包是 `@Sendable`，stdout/stderr 两个读线程可能并发调用，
+/// 所以用锁保护。
+private final class StageDeduplicator: @unchecked Sendable {
+    private let lock = NSLock()
+    private let progress: (@Sendable (AIEnvironmentUpdateStage) -> Void)?
+    private var lastStage: AIEnvironmentUpdateStage?
+
+    init(progress: (@Sendable (AIEnvironmentUpdateStage) -> Void)?) {
+        self.progress = progress
+    }
+
+    func emit(from output: String) {
+        guard let stage = LocalPackageManagerService.updateStage(from: output) else {
+            return
+        }
+        lock.lock()
+        guard lastStage != stage else {
+            lock.unlock()
+            return
+        }
+        lastStage = stage
+        lock.unlock()
+        progress?(stage)
     }
 }

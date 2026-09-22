@@ -5,6 +5,7 @@ struct PackageManagersView: View {
     @ObservedObject var store: PackageManagerStore
     @State private var expandedKind: PackageManagerKind?
     @State private var hoveredKind: PackageManagerKind?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(store: PackageManagerStore) {
         self.store = store
@@ -26,10 +27,12 @@ struct PackageManagersView: View {
             }
             .background(DesignColor.canvas)
 
-            if let status = store.statusMessage {
+            if let status = store.statusMessage, status.tone == .error {
+                StatusBanner(text: status.text, onDismiss: { store.dismissStatus() })
+            } else if let status = store.statusMessage {
                 StatusBar(
                     text: status.text,
-                    tone: status.tone == .error ? .error : .notice,
+                    tone: .notice,
                     onDismiss: { store.dismissStatus() }
                 )
             }
@@ -82,29 +85,18 @@ struct PackageManagersView: View {
     private var managersSection: some View {
         GroupSection(title: "包管理器") {
             VStack(spacing: 0) {
+                // 扫描还没回来时不要先渲染「未安装」+ 可点的安装按钮：
+                // 那是一个已知错误的状态，用户会据此做出错误操作。
+
                 ForEach(Array(store.statuses.enumerated()), id: \.element.id) { index, status in
                     GroupRow(dividerAbove: index > 0) {
                         managerSummary(status)
                     }
-                    .contentShape(Rectangle())
                     .background(rowBackground(for: status.kind))
-                    .onHover { hovering in
-                        withAnimation(.easeOut(duration: 0.12)) {
-                            if hovering {
-                                hoveredKind = status.kind
-                            } else if hoveredKind == status.kind {
-                                hoveredKind = nil
-                            }
-                        }
+                    .onHover { isHovering in
+                        updateHover(kind: status.kind, isHovering: isHovering)
                     }
-                    .onTapGesture {
-                        toggleExpansion(status.kind)
-                    }
-                    .accessibilityAction(
-                        named: Text(expandedKind == status.kind ? "收起" : "设置镜像地址")
-                    ) {
-                        toggleExpansion(status.kind)
-                    }
+                    .redacted(reason: store.isLoading ? .placeholder : [])
 
                     if expandedKind == status.kind {
                         VStack(spacing: 0) {
@@ -135,7 +127,15 @@ struct PackageManagersView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 7) {
                     Text(status.kind.displayName)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(.body, weight: .semibold))
+
+                    if let currentVersion = status.currentVersion {
+                        Text(currentVersion)
+                            .rowVersionFont()
+                    } else if !status.isInstalled, let latestVersion = status.latestVersion {
+                        Text("最新版 \(latestVersion)")
+                            .rowVersionFont()
+                    }
 
                     if status.isInstalled {
                         Pill(status.installMethod.label, tone: .neutral)
@@ -156,7 +156,7 @@ struct PackageManagersView: View {
                 }
 
                 if let executablePath = status.executablePath {
-                    Text(executablePath)
+                    Text(DisplayPath.short(executablePath))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -168,7 +168,11 @@ struct PackageManagersView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                versionLine(status)
+                if status.errorMessage?.isEmpty == false
+                    || status.updateAvailable
+                    || (status.isInstalled && status.currentVersion == nil) {
+                    versionLine(status)
+                }
             }
 
             Spacer(minLength: 12)
@@ -192,7 +196,7 @@ struct PackageManagersView: View {
                     }
                     .appButton(.quiet, size: .small)
                 }
-                .frame(width: 190, alignment: .trailing)
+                .frame(minWidth: 230, alignment: .trailing)
                 .help(
                     store.busyAction(for: status.kind) == .install
                         ? "取消安装 \(status.kind.displayName)"
@@ -206,15 +210,20 @@ struct PackageManagersView: View {
                         Label("更新到 \(latestVersion)", systemImage: "arrow.down.circle")
                     }
                     .appButton(.primary, size: .small)
+                    .disabled(store.isLoading || store.isBusy(status.kind))
+                    .frame(minWidth: 230, alignment: .trailing)
                 } else if status.latestVersion != nil {
                     Label("已是最新", systemImage: "checkmark")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .frame(minWidth: 230, alignment: .trailing)
                 } else {
                     Button("更新") {
                         Task { await store.update(status.kind) }
                     }
                     .appButton(.secondary, size: .small)
+                    .disabled(store.isLoading || store.isBusy(status.kind))
+                    .frame(minWidth: 230, alignment: .trailing)
                 }
             } else {
                 Button {
@@ -222,7 +231,9 @@ struct PackageManagersView: View {
                 } label: {
                     Label("安装", systemImage: "arrow.down.circle")
                 }
-                .appButton(.primary, size: .small)
+                .appButton(.secondary, size: .small)
+                .disabled(store.isLoading || store.isBusy(status.kind))
+                .frame(minWidth: 230, alignment: .trailing)
             }
 
             if status.isInstalled {
@@ -230,9 +241,13 @@ struct PackageManagersView: View {
                     Button("在 Finder 中显示") {
                         DesktopPathActions.revealInFinder(status.executablePath ?? "")
                     }
+                    // 路径为空时以前是「点了没反应」（复制还会复制走空串）。禁用比留一个
+                    // 看起来可用的菜单项诚实。
+                    .disabled(!DesktopPathActions.isUsablePath(status.executablePath))
                     Button("复制可执行文件路径") {
                         WindowActions.copy(status.executablePath ?? "")
                     }
+                    .disabled(!DesktopPathActions.isUsablePath(status.executablePath))
                 } label: {
                     Image(systemName: "ellipsis")
                 }
@@ -244,18 +259,47 @@ struct PackageManagersView: View {
                 .accessibilityLabel("\(status.kind.displayName) 的更多操作")
             }
 
-            Image(systemName: "chevron.right")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.tertiary)
-                .rotationEffect(.degrees(expandedKind == status.kind ? 90 : 0))
-                .frame(width: 12)
-                .accessibilityHidden(true)
+            Button {
+                toggleExpansion(status.kind)
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(.caption, weight: .semibold))
+                    .foregroundStyle(DesignColor.tertiaryText)
+                    .rotationEffect(.degrees(expandedKind == status.kind ? 90 : 0))
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(expandedKind == status.kind ? "收起镜像地址设置" : "展开镜像地址设置")
+            .accessibilityLabel("\(status.kind.displayName) 的镜像地址设置")
+            .accessibilityValue(expandedKind == status.kind ? "已展开" : "已收起")
         }
     }
 
     private func toggleExpansion(_ kind: PackageManagerKind) {
-        withAnimation(.snappy(duration: 0.22)) {
+        if reduceMotion {
             expandedKind = expandedKind == kind ? nil : kind
+        } else {
+            withAnimation(.snappy(duration: 0.22)) {
+                expandedKind = expandedKind == kind ? nil : kind
+            }
+        }
+    }
+
+    private func updateHover(kind: PackageManagerKind, isHovering: Bool) {
+        let update = {
+            if isHovering {
+                hoveredKind = kind
+            } else if hoveredKind == kind {
+                hoveredKind = nil
+            }
+        }
+        if reduceMotion {
+            update()
+        } else {
+            withAnimation(.easeOut(duration: 0.12)) {
+                update()
+            }
         }
     }
 
@@ -284,17 +328,18 @@ struct PackageManagersView: View {
 
             if status.updateAvailable, let latestVersion = status.latestVersion {
                 Image(systemName: "arrow.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(.caption2, weight: .semibold))
+                    .foregroundStyle(DesignColor.tertiaryText)
+                    .accessibilityHidden(true)
                 Text(latestVersion)
-                    .font(.system(size: 12, weight: .medium).monospacedDigit())
+                    .font(.system(.callout, weight: .medium).monospacedDigit())
                     .foregroundStyle(.secondary)
             }
 
             if let errorMessage = status.errorMessage, !errorMessage.isEmpty {
                 Text(errorMessage)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(DesignColor.statusNegative)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .help(errorMessage)
@@ -335,9 +380,10 @@ private struct PackageManagerMirrorEditor: View {
                 Spacer(minLength: 8)
 
                 if !savedAddress.isEmpty {
+                    // 「保存」才是提交动作。这里只把输入框改回官方源，避免一次点击就把
+                    // 用户自定义的镜像静默丢掉。
                     Button("恢复默认") {
                         address = ""
-                        onSave("")
                     }
                     .appButton(.quiet, size: .small)
                 }
@@ -345,9 +391,10 @@ private struct PackageManagerMirrorEditor: View {
 
             HStack(spacing: 8) {
                 Image(systemName: "link")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(.callout, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(width: 16)
+                    .accessibilityHidden(true)
 
                 TextField(placeholder, text: $address)
                     .textFieldStyle(.roundedBorder)
@@ -365,7 +412,7 @@ private struct PackageManagerMirrorEditor: View {
             if let validationMessage {
                 Text(validationMessage)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(DesignColor.statusNegative)
             }
         }
         .onChange(of: savedAddress) { _, newValue in
@@ -416,6 +463,7 @@ private struct PackageManagerMirrorEditor: View {
 private struct PackageManagerBadge: View {
     let kind: PackageManagerKind
     var size: CGFloat = Metric.badgeSize
+    @ScaledMetric(relativeTo: .body) private var glyphScale: CGFloat = 1
 
     var body: some View {
         RoundedRectangle(cornerRadius: size * 0.29, style: .continuous)
@@ -423,8 +471,9 @@ private struct PackageManagerBadge: View {
             .frame(width: size, height: size)
             .overlay {
                 Image(systemName: kind.symbol)
-                    .font(.system(size: size * 0.42, weight: .semibold))
+                    .font(.system(size: size * 0.42 * glyphScale, weight: .semibold))
                     .foregroundStyle(kind.tint)
+                    .accessibilityHidden(true)
             }
             .accessibilityHidden(true)
     }
@@ -460,13 +509,13 @@ private extension PackageManagerKind {
     var tint: Color {
         switch self {
         case .npm:
-            return Color(red: 0.78, green: 0.20, blue: 0.18)
+            return DesignColor.brandTint(red: 0.78, green: 0.20, blue: 0.18)
         case .pnpm:
-            return Color(red: 0.85, green: 0.55, blue: 0.10)
+            return DesignColor.brandTint(red: 0.85, green: 0.55, blue: 0.10)
         case .homebrew:
-            return Color(red: 0.68, green: 0.44, blue: 0.12)
+            return DesignColor.brandTint(red: 0.68, green: 0.44, blue: 0.12)
         case .uv:
-            return Color(red: 0.35, green: 0.28, blue: 0.72)
+            return DesignColor.brandTint(red: 0.35, green: 0.28, blue: 0.72)
         }
     }
 }

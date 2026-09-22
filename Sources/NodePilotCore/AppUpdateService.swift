@@ -464,6 +464,7 @@ public struct AppUpdateService: Sendable {
     /// 下载 `ENVPilot.zip`，解压并校验其中的 `.app`。任何一步不通过都不会替换现有安装。
     public func downloadAndStage(
         _ release: AppRelease,
+        cancellation: ShellCommandCancellation? = nil,
         progress: (@Sendable (AppUpdateProgress) -> Void)? = nil
     ) throws -> StagedAppUpdate {
         guard let archiveURL = release.archiveURL else {
@@ -479,6 +480,7 @@ public struct AppUpdateService: Sendable {
             from: archiveURL,
             to: archiveURLOnDisk,
             label: "正在下载 ENVPilot \(release.version)",
+            cancellation: cancellation,
             progress: progress
         )
 
@@ -497,6 +499,7 @@ public struct AppUpdateService: Sendable {
     /// 无法自更新时把 dmg 下到 `~/Downloads`，交给 Finder/安装器。
     public func downloadDiskImage(
         _ release: AppRelease,
+        cancellation: ShellCommandCancellation? = nil,
         progress: (@Sendable (AppUpdateProgress) -> Void)? = nil
     ) throws -> URL {
         guard let url = release.diskImageURL else {
@@ -511,6 +514,7 @@ public struct AppUpdateService: Sendable {
             from: url,
             to: destination,
             label: "正在下载 ENVPilot \(release.version)",
+            cancellation: cancellation,
             progress: progress
         )
         return destination
@@ -636,8 +640,12 @@ public struct AppUpdateService: Sendable {
         from url: URL,
         to destination: URL,
         label: String,
+        cancellation: ShellCommandCancellation? = nil,
         progress: (@Sendable (AppUpdateProgress) -> Void)?
     ) throws {
+        if cancellation?.isCancelled == true {
+            throw CancellationError()
+        }
         let semaphore = DispatchSemaphore(value: 0)
         let state = UpdateRequestState()
         let delegate = UpdateDownloadDelegate(
@@ -655,6 +663,11 @@ public struct AppUpdateService: Sendable {
         sessionConfiguration.timeoutIntervalForRequest = 30
         sessionConfiguration.timeoutIntervalForResource = 600
         let session = URLSession(configuration: sessionConfiguration, delegate: delegate, delegateQueue: queue)
+        // 取消令牌直接掐断传输：一个 200MB 的包只靠「不等它」是取消不掉的，
+        // `invalidateAndCancel()` 会让 delegate 立刻收到取消错误并唤醒下面的信号量。
+        cancellation?.registerCancellationHandler {
+            session.invalidateAndCancel()
+        }
         var request = URLRequest(url: url)
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         session.downloadTask(with: request).resume()

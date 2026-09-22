@@ -94,6 +94,9 @@ public struct EnvironmentSetupService: @unchecked Sendable {
     private let fileManager: FileManager
     private let homeURL: URL
     private let helperSourceURL: URL?
+    /// 同一个服务实例只给 shell 配置留一次备份：repair 可能被连点多次，
+    /// 没必要每秒都在用户 home 下留一份 `.zshrc.envpilot-backup-*`。
+    private let shellConfigBackupGate = ShellConfigBackupGate()
 
     public init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -311,11 +314,7 @@ public struct EnvironmentSetupService: @unchecked Sendable {
         guard let helperSourceURL else {
             throw EnvironmentSetupError.helperUnavailable
         }
-        if fileManager.fileExists(atPath: helperURL.path) {
-            try fileManager.removeItem(at: helperURL)
-        }
-        try fileManager.copyItem(at: helperSourceURL, to: helperURL)
-        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helperURL.path)
+        try installHelper(from: helperSourceURL)
 
         if fileManager.fileExists(atPath: epURL.path) {
             try fileManager.removeItem(at: epURL)
@@ -323,12 +322,88 @@ public struct EnvironmentSetupService: @unchecked Sendable {
         try fileManager.createSymbolicLink(atPath: epURL.path, withDestinationPath: "envpilot-helper")
     }
 
+    /// 先把 helper 拷到同目录的临时文件，最后一步整体替换。
+    ///
+    /// 以前是 `removeItem(helperURL)` 再 `copyItem(...)`：拷贝一旦失败（磁盘满、来源
+    /// 被删），用户就既没有旧 helper 也没有新的，`ep` 直接不可用。同目录保证
+    /// `replaceItemAt` 是同一卷内的原子替换，失败时旧文件仍在。
+    private func installHelper(from source: URL) throws {
+        let directory = helperURL.deletingLastPathComponent()
+        let temporaryURL = directory.appendingPathComponent(
+            "envpilot-helper.tmp-\(UUID().uuidString)"
+        )
+        defer { try? fileManager.removeItem(at: temporaryURL) }
+
+        try fileManager.copyItem(at: source, to: temporaryURL)
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: temporaryURL.path)
+
+        if fileManager.fileExists(atPath: helperURL.path) {
+            _ = try fileManager.replaceItemAt(helperURL, withItemAt: temporaryURL)
+        } else {
+            try fileManager.moveItem(at: temporaryURL, to: helperURL)
+        }
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helperURL.path)
+    }
+
     private func installShellIntegration() throws {
-        let existing = (try? String(contentsOf: zshrcURL, encoding: .utf8)) ?? ""
+        let existing: String
+        if fileManager.fileExists(atPath: zshrcURL.path) {
+            existing = (try? String(contentsOf: zshrcURL, encoding: .utf8)) ?? ""
+        } else {
+            existing = ""
+        }
         let snippet = shellIntegration.renderInstallSnippet(helperPath: helperURL.path)
         let updated = Self.updatedZshrc(existing, snippet: snippet)
+
+        // 内容没变就完全不写：既不会丢掉用户在此期间对 ~/.zshrc 的并发编辑，
+        // 也不会用原子替换把文件模式/属主重置成默认值。
+        guard updated != existing else {
+            return
+        }
+
+        let originalAttributes = try? fileManager.attributesOfItem(atPath: zshrcURL.path)
+        if originalAttributes != nil, shellConfigBackupGate.claim() {
+            try backupShellConfig()
+        }
+
         try Data(updated.utf8).write(to: zshrcURL, options: .atomic)
+        if let originalAttributes {
+            restoreFileAttributes(originalAttributes, at: zshrcURL)
+        }
     }
+
+    /// 整体重写之前先留一份带时间戳的副本，用户丢了配置还能自己找回来。
+    private func backupShellConfig() throws {
+        let stamp = Self.backupTimestampFormatter.string(from: Date())
+        let backupURL = zshrcURL.deletingLastPathComponent()
+            .appendingPathComponent("\(zshrcURL.lastPathComponent).envpilot-backup-\(stamp)")
+        // 同一秒内重复备份会撞名，先删旧的，保证这一次的备份一定写得进去。
+        if fileManager.fileExists(atPath: backupURL.path) {
+            try fileManager.removeItem(at: backupURL)
+        }
+        try fileManager.copyItem(at: zshrcURL, to: backupURL)
+    }
+
+    /// `.atomic` 写盘会替换整个文件，权限/属主不会自动继承，这里显式写回。
+    private func restoreFileAttributes(_ attributes: [FileAttributeKey: Any], at url: URL) {
+        var restored: [FileAttributeKey: Any] = [:]
+        for key in [FileAttributeKey.posixPermissions, .ownerAccountID, .groupOwnerAccountID] {
+            if let value = attributes[key] {
+                restored[key] = value
+            }
+        }
+        guard !restored.isEmpty else {
+            return
+        }
+        try? fileManager.setAttributes(restored, ofItemAtPath: url.path)
+    }
+
+    private static let backupTimestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter
+    }()
 
     private func repairRuntime(progress: (@Sendable (String) -> Void)?) throws {
         var snapshot = try runtimeProvider.loadSnapshot(progress: progress)
@@ -406,5 +481,23 @@ public enum EnvironmentSetupError: LocalizedError {
         case .nodeCandidateUnavailable:
             return "没有找到可安装的 Node LTS 版本。"
         }
+    }
+}
+
+/// 「这次实例是否已经备份过」的一次性开关。`EnvironmentSetupService` 是
+/// `@unchecked Sendable`，repair 可能被并发触发，所以用锁保护。
+private final class ShellConfigBackupGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    /// 返回 true 表示本次调用应该执行备份；同一个实例只有第一次为 true。
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !claimed else {
+            return false
+        }
+        claimed = true
+        return true
     }
 }

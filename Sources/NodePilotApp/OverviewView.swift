@@ -27,7 +27,9 @@ struct OverviewView: View {
     }
 
     var body: some View {
+#if DEBUG
         let _ = PerfProbe.noteBody("overview")
+#endif
         PageContainer {
             if store.snapshot == nil {
                 GroupSection {
@@ -77,7 +79,9 @@ struct OverviewView: View {
             VStack(spacing: 0) {
                 ForEach(Array(store.summaries.enumerated()), id: \.element.id) { index, summary in
                     GroupRow(dividerAbove: index > 0) {
-                        EnvironmentHeroRow(summary: summary)
+                        EnvironmentHeroRow(summary: summary) {
+                            onOpenRuntime(summary.kind)
+                        }
                     }
                 }
             }
@@ -94,7 +98,10 @@ struct OverviewView: View {
             VStack(spacing: 0) {
                 ForEach(Array(aiStore.statuses.enumerated()), id: \.element.id) { index, status in
                     GroupRow(dividerAbove: index > 0) {
-                        AIEnvironmentOverviewRow(status: status) {
+                        AIEnvironmentOverviewRow(
+                            status: status,
+                            onOpen: { onOpenAI(status.kind) }
+                        ) {
                             onOpenAI(status.kind)
                         }
                     }
@@ -128,7 +135,7 @@ struct OverviewView: View {
                 if activationScript.isEmpty {
                     Text("当前没有需要导出的环境变量。")
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DesignColor.tertiaryText)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
                         .background(DesignColor.well, in: RoundedRectangle(cornerRadius: 6))
@@ -173,6 +180,7 @@ struct OverviewView: View {
 /// 「当前环境」里的一行：徽章 + 大号版本号 + 名称/路径/状态。
 private struct EnvironmentHeroRow: View {
     let summary: RuntimeSummary
+    let onOpen: () -> Void
 
     private var isActive: Bool {
         summary.current != nil
@@ -183,11 +191,14 @@ private struct EnvironmentHeroRow: View {
             RuntimeBadge(kind: summary.kind, size: 26, isActive: isActive)
 
             Text(isActive ? VersionLabel.display(summary.kind, summary.version) : "—")
-                .font(.system(size: 18, weight: .semibold, design: .monospaced))
+                .font(.system(.title2, design: .monospaced, weight: .semibold))
                 .monospacedDigit()
-                .foregroundStyle(isActive ? AnyShapeStyle(Color.primary) : AnyShapeStyle(.tertiary))
-                // 固定列宽：三种运行时的名称列与 chip 列纵向对齐。
-                .frame(width: 118, alignment: .leading)
+                .foregroundStyle(isActive ? AnyShapeStyle(Color.primary) : AnyShapeStyle(DesignColor.tertiaryText))
+                // 列宽只给下限：三个运行时的名称列仍然纵向对齐，但长版本号
+                // （`8 · 1.8.0_402`、`17.0.20.1`）不会再被硬裁。
+                .frame(minWidth: 118, alignment: .leading)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 7) {
@@ -212,6 +223,26 @@ private struct EnvironmentHeroRow: View {
             }
 
             Spacer(minLength: 12)
+
+            if summary.options.isEmpty {
+                Button("安装") {
+                    onOpen()
+                }
+                .appButton(.secondary, size: .small)
+                .accessibilityLabel("安装 \(summary.kind.title)")
+            } else if !summary.isCurrentValid {
+                Button("管理版本") {
+                    onOpen()
+                }
+                .appButton(.secondary, size: .small)
+                .accessibilityLabel("管理 \(summary.kind.title) 版本")
+            } else if !isActive {
+                Button("选择版本") {
+                    onOpen()
+                }
+                .appButton(.secondary, size: .small)
+                .accessibilityLabel("选择 \(summary.kind.title) 版本")
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(summary.kind.title) \(isActive ? summary.version : "未安装")")
@@ -232,6 +263,7 @@ private struct EnvironmentHeroRow: View {
 
 private struct AIEnvironmentOverviewRow: View {
     let status: AIEnvironmentStatus
+    let onOpen: () -> Void
     let onOpenUpdate: () -> Void
 
     var body: some View {
@@ -239,9 +271,9 @@ private struct AIEnvironmentOverviewRow: View {
             AIEnvironmentBadge(kind: status.kind, size: 26)
 
             Text(status.currentVersion ?? "—")
-                .font(.system(size: 18, weight: .semibold, design: .monospaced))
+                .font(.system(.title2, design: .monospaced, weight: .semibold))
                 .monospacedDigit()
-                .foregroundStyle(status.isInstalled ? AnyShapeStyle(Color.primary) : AnyShapeStyle(.tertiary))
+                .foregroundStyle(status.isInstalled ? AnyShapeStyle(Color.primary) : AnyShapeStyle(DesignColor.tertiaryText))
                 .frame(width: 118, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -268,6 +300,12 @@ private struct AIEnvironmentOverviewRow: View {
 
             if status.updateAvailable, let latestVersion = status.latestVersion {
                 OverviewUpdateTip(version: latestVersion, action: onOpenUpdate)
+            } else if !status.isInstalled {
+                Button("管理") {
+                    onOpen()
+                }
+                .appButton(.secondary, size: .small)
+                .accessibilityLabel("管理 \(status.kind.displayName)")
             }
         }
         .accessibilityElement(children: .contain)
@@ -290,16 +328,18 @@ private struct OverviewUpdateTip: View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: "arrow.down.circle")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(.caption, weight: .semibold))
+                    .accessibilityHidden(true)
                 Text("可更新至 \(version)")
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(.system(.caption2, weight: .bold))
+                    .accessibilityHidden(true)
             }
             .font(.caption2.weight(.medium))
-            .foregroundStyle(Color.orange)
+            .foregroundStyle(DesignColor.statusWarning)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
-            .background(Color.orange.opacity(0.12), in: Capsule())
+            .background(DesignColor.statusWarning.opacity(0.12), in: Capsule())
         }
         .buttonStyle(.plain)
         .help("前往 AI 环境页更新 \(version)")
