@@ -94,8 +94,22 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --sign - "$APP_BUNDLE/Contents/Resources/bin/envpilot-helper"
-codesign --force --sign - "$APP_BUNDLE"
+# 签名身份：默认取本机钥匙串里第一个有效的 codesigning 身份（Apple Development），
+# 可用 SIGN_IDENTITY 环境变量覆盖；设为 "adhoc" 回退到自签名。
+# 注意：Apple Development 证书用于开发机自装/团队内部，
+# 对外分发到别人的 Mac 需要 Developer ID Application + 公证。
+SIGN_IDENTITY="${SIGN_IDENTITY:-$(security find-identity -v -p codesigning \
+  | sed -n 's/^ *[0-9]*) [A-F0-9]* "\([^"]*\)".*$/\1/p' | head -1)}"
+if [[ "$SIGN_IDENTITY" == "adhoc" || -z "$SIGN_IDENTITY" ]]; then
+  SIGNER="-"
+  TIMESTAMP_FLAG=()
+else
+  SIGNER="$SIGN_IDENTITY"
+  TIMESTAMP_FLAG=(--timestamp)
+fi
+echo "Signing with: ${SIGNER}"
+codesign --force --sign "$SIGNER" ${TIMESTAMP_FLAG[@]} "$APP_BUNDLE/Contents/Resources/bin/envpilot-helper"
+codesign --force --sign "$SIGNER" ${TIMESTAMP_FLAG[@]} "$APP_BUNDLE"
 
 rm -rf "$DMG_STAGE_DIR"
 mkdir -p "$DMG_STAGE_DIR"
@@ -107,8 +121,10 @@ hdiutil create \
   -ov \
   -format UDZO \
   "$DMG_PATH" >/dev/null
+shasum -a 256 "$DMG_PATH" > "$DMG_PATH.sha256"
 
 echo "Packaged app:"
 echo "  $APP_BUNDLE"
 echo "Packaged dmg:"
 echo "  $DMG_PATH"
+echo "  $DMG_PATH.sha256"
