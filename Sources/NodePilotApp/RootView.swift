@@ -142,7 +142,15 @@ struct RootView: View {
 
     @ViewBuilder
     private var brandIcon: some View {
-        if let appIcon = Bundle.module.image(forResource: "AppIcon")
+        // 从 `.app/Contents/Resources/AppIcon.icns` 读，而不是 `Bundle.module`。
+        //
+        // `Bundle.module` 是 SwiftPM 给带 `resources:` 的 target 生成的访问器，它在找不到
+        // 资源包时会 `fatalError`——而「资源包放哪」取决于构建工具：CI 上原生 SwiftPM 生成的
+        // 访问器去 `.app` 根目录找 `<包名>_<target>.bundle`，打包脚本却按 macOS 惯例放进
+        // `Contents/Resources/`，于是 1.0.0 在首次渲染侧边栏时直接 SIGTRAP 崩溃。
+        // 图标本来就随 `Contents/Resources/AppIcon.icns` 一起打包，走主 bundle 既正确又稳定，
+        // 也顺带把 Package.swift 里那个 `resources:` 声明去掉了。
+        if let appIcon = Bundle.main.image(forResource: "AppIcon")
             ?? NSApplication.shared.applicationIconImage
         {
             Image(nsImage: appIcon)

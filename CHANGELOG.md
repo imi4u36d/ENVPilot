@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.1 - 2026-09-22
+
+### 修复：1.0.0 安装后打不开（「意外退出」）
+
+- **原因**：`Package.swift` 给 `ENVPilotApp` 声明了 `resources:`，SwiftPM 因此生成 `Bundle.module`，而侧边栏的品牌图标正好读它。这个访问器在找不到资源包时会 `fatalError`，可「资源包该放哪」取决于构建工具——CI 上原生 SwiftPM 生成的访问器去 `.app` **根目录**找 `ENVPilot_ENVPilotApp.bundle`，打包脚本却按 macOS 惯例放进 `Contents/Resources/`。于是应用一渲染侧边栏就 SIGTRAP 崩溃。签名、`codesign --verify`、DMG 结构检查都看不出这个问题：`swift run` 与本地 Xcode 构建路径正常，只有装进 `/Applications` 的那一份会崩。
+- **修复**：图标改从主 bundle 读（`Bundle.main.image(forResource: "AppIcon")`——脚本本来就把 `AppIcon.icns` 放进 `Contents/Resources/`），并去掉 `resources:` 声明，让 `Bundle.module` 这个失败模式彻底不存在。
+- **防回归**：`scripts/create_dmg.sh` 现在会在签名之后、生成 DMG **之前**，真的把打好的 `.app` 启动一次并确认它 8 秒内没有退出。只做结构校验是拦不住「DMG 打得出来、装上去打不开」这类问题的。
+
+> 已经装了 1.0.0 的话：它打不开，所以用不了应用内的「检查更新」，请直接下载本页的 DMG 覆盖安装。
+
 ## v1.0.0 - 2026-09-22
 
 第一个 1.0。定位从「Node 版本管理器」扩成一整套开发环境管理器：除了 Node.js / JDK / Python，现在还管终端里的 AI 编码工具和包管理器；并且按 Apple HIG 做了一轮完整审计，把界面、无障碍、可靠性和数据安全上的问题一次性收干净。

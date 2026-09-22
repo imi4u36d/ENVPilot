@@ -13,7 +13,10 @@ BIN_DIR="$ROOT_DIR/.build/${BUILD_CONFIG}"
 APP_BIN="$BIN_DIR/ENVPilotApp"
 HELPER_BIN="$BIN_DIR/envpilot-helper"
 APP_ICON="$ROOT_DIR/Resources/AppIcon.icns"
-APP_RESOURCE_BUNDLE="$BIN_DIR/ENVPilot_ENVPilotApp.bundle"
+
+# 这里不再复制 SwiftPM 的 `<包名>_<target>.bundle`：Package.swift 已经不声明 `resources:`，
+# 代码也从 `Bundle.module` 改成了 `Bundle.main`。原因见 Package.swift 里的注释——
+# Bundle.module 的「资源包该放哪」在不同构建工具下不一致，1.0.0 因此启动即崩溃。
 
 echo "Building ENVPilot..."
 cd "$ROOT_DIR"
@@ -23,7 +26,7 @@ export CLANG_MODULE_CACHE_PATH="$MODULE_CACHE_ROOT/clang"
 swift build -c "$BUILD_CONFIG" --product ENVPilotApp
 swift build -c "$BUILD_CONFIG" --product envpilot-helper
 
-for file in "$APP_BIN" "$HELPER_BIN" "$APP_ICON" "$APP_RESOURCE_BUNDLE"; do
+for file in "$APP_BIN" "$HELPER_BIN" "$APP_ICON"; do
   if [[ ! -e "$file" ]]; then
     echo "Missing build input: $file" >&2
     exit 1
@@ -36,14 +39,13 @@ mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources/bin"
 cp "$APP_BIN" "$APP_BUNDLE/Contents/MacOS/ENVPilotApp"
 cp "$HELPER_BIN" "$APP_BUNDLE/Contents/Resources/bin/envpilot-helper"
 cp "$APP_ICON" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
-cp -R "$APP_RESOURCE_BUNDLE" "$APP_BUNDLE/Contents/Resources/ENVPilot_ENVPilotApp.bundle"
 cp -R "$ROOT_DIR/Resources/zh-Hans.lproj" "$APP_BUNDLE/Contents/Resources/zh-Hans.lproj"
 
 chmod +x "$APP_BUNDLE/Contents/MacOS/ENVPilotApp"
 chmod +x "$APP_BUNDLE/Contents/Resources/bin/envpilot-helper"
 
-APP_VERSION="${APP_VERSION:-1.0.0}"
-APP_BUILD="${APP_BUILD:-10}"
+APP_VERSION="${APP_VERSION:-1.0.1}"
+APP_BUILD="${APP_BUILD:-11}"
 
 cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -95,6 +97,48 @@ echo "Signing with: ${SIGNER}"
 codesign --force --sign "$SIGNER" ${TIMESTAMP_FLAG[@]} "$APP_BUNDLE/Contents/Resources/bin/envpilot-helper"
 codesign --force --sign "$SIGNER" ${TIMESTAMP_FLAG[@]} "$APP_BUNDLE"
 codesign --verify --deep --strict "$APP_BUNDLE"
+
+# 启动冒烟测试：直接跑 .app 里的可执行文件，等价于用户双击。
+#
+# 1.0.0 装了打不开就是这里没拦住的：DMG 打得好好的、签名也过、`codesign --verify` 也绿，
+# 但应用一渲染侧边栏就因为 `Bundle.module` 找不到资源包 SIGTRAP 崩溃。签名与结构检查
+# 都看不出这种问题，只有真的把它启动一次才知道。不需要时设 SKIP_SMOKE_TEST=1 跳过。
+if [[ "${SKIP_SMOKE_TEST:-0}" != "1" ]]; then
+  echo "Smoke test: launching the packaged app..."
+  SMOKE_LOG="$(mktemp -t envpilot-smoke)"
+  "$APP_BUNDLE/Contents/MacOS/${APP_NAME}App" >"$SMOKE_LOG" 2>&1 &
+  SMOKE_PID=$!
+  SMOKE_DIED=0
+  for _ in {1..16}; do
+    sleep 0.5
+    if ! kill -0 "$SMOKE_PID" 2>/dev/null; then
+      SMOKE_DIED=1
+      break
+    fi
+  done
+  if [[ "$SMOKE_DIED" == "1" ]]; then
+    wait "$SMOKE_PID" 2>/dev/null || true
+    if grep -qE "Fatal error|fatal error|unable to find|could not load|SIGTRAP|Trace/BPT" "$SMOKE_LOG"; then
+      echo "Smoke test FAILED: 应用启动即崩溃，DMG 不生成。" >&2
+      cat "$SMOKE_LOG" >&2
+      rm -f "$SMOKE_LOG"
+      exit 1
+    fi
+    # 没有致命错误却立刻退出：更可能是这个环境起不了 GUI（比如无窗口会话的 CI），
+    # 记为警告而不是失败，免得把发布管线卡在环境问题上。要严格失败就设 STRICT_SMOKE_TEST=1。
+    echo "Smoke test WARNING: 应用提前退出但没有致命错误输出（可能是当前环境无 GUI 会话）。" >&2
+    cat "$SMOKE_LOG" >&2
+    rm -f "$SMOKE_LOG"
+    if [[ "${STRICT_SMOKE_TEST:-0}" == "1" ]]; then
+      exit 1
+    fi
+  else
+    kill "$SMOKE_PID" 2>/dev/null || true
+    wait "$SMOKE_PID" 2>/dev/null || true
+    rm -f "$SMOKE_LOG"
+    echo "Smoke test passed: 应用启动后持续存活。"
+  fi
+fi
 
 rm -rf "$DMG_STAGE_DIR"
 mkdir -p "$DMG_STAGE_DIR"
