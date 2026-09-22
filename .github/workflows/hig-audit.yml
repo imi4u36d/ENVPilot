@@ -1,0 +1,61 @@
+name: HIG audit
+
+# 静态界面规则审计（hig-doctor）。这是审查证据，不是 HIG 合规认证。
+#   - PR / push 到 main：只挡「新增」的问题（配合 .hig-baseline.json）
+#   - 手动运行：可以看完整报告
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hig-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: hig-doctor
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write # 上传 SARIF 到 code scanning
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # 版本钉死：审计结论要可复现，不能用 latest。
+      # .higauditignore 已经排除 .build / dist / artifacts。
+      - name: Run hig-doctor
+        run: |
+          npx -y hig-doctor@2.0.3 . \
+            --format sarif \
+            --baseline .hig-baseline.json \
+            > hig-audit.sarif
+
+      - name: Print severity summary
+        if: always()
+        run: |
+          npx -y hig-doctor@2.0.3 . --json --baseline .hig-baseline.json \
+            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log("concerns:",JSON.stringify(j.severities),"totals:",JSON.stringify(j.totals));})'
+
+      # critical 是「会破坏无障碍」的那一档，为 0 才允许合并。
+      - name: Gate on new critical findings
+        run: |
+          npx -y hig-doctor@2.0.3 . --baseline .hig-baseline.json --fail-on critical
+
+      # 仓库没开 code scanning 时这一步会被 GitHub 拒绝（需 Advanced Security）。
+      # 审计本身的结果由前面的 JSON 汇总与 --fail-on 门槛负责，这里不因上传失败把 CI 判红。
+      - name: Upload SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: hig-audit.sarif

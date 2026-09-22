@@ -1,0 +1,7 @@
+# hig-doctor 审计忽略清单（一行一个 glob，# 为注释）。
+# 只扫源码：构建产物、依赖与离屏截图都不该参与界面规则检查。
+.build
+.git
+dist
+artifacts
+docs/screenshots

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "generated": "2026-09-22",
+  "findings": {
+    "swift/image-without-a11y\u0000Sources/NodePilotApp/AIEnvironmentsView.swift\u0000Image(systemName: \"ellipsis\")": 1,
+    "swift/hardcoded-font-size\u0000Sources/NodePilotApp/AIEnvironmentsView.swift\u0000.font(.system(size: size * 0.44 * glyphScale, weight: .semibold))": 1,
+    "swift/hardcoded-font-size\u0000Sources/NodePilotApp/DesignKit.swift\u0000.font(.system(size: size * 0.46 * glyphScale, weight: .semibold))": 1,
+    "swift/image-without-a11y\u0000Sources/NodePilotApp/DesignKit.swift\u0000Image(systemName: didCopy ? \"checkmark\" : \"doc.on.doc\")": 1,
+    "swift/image-without-a11y\u0000Sources/NodePilotApp/DesignKit.swift\u0000Image(systemName: \"folder\")": 1,
+    "swift/image-without-a11y\u0000Sources/NodePilotApp/DesignKit.swift\u0000Image(systemName: \"xmark\")": 2,
+    "appkit/hardcoded-nscolor-constant\u0000Sources/NodePilotApp/MenuBarIcon.swift\u0000let paint = NSColor.black": 1,
+    "swift/image-without-a11y\u0000Sources/NodePilotApp/PackageManagersView.swift\u0000Image(systemName: \"ellipsis\")": 1,
+    "swift/image-without-a11y\u0000Sources/NodePilotApp/PackageManagersView.swift\u0000Image(systemName: \"chevron.right\")": 1,
+    "swift/hardcoded-font-size\u0000Sources/NodePilotApp/PackageManagersView.swift\u0000.font(.system(size: size * 0.42 * glyphScale, weight: .semibold))": 1,
+    "swift/ignores-safe-area\u0000Sources/NodePilotApp/RootView.swift\u0000.ignoresSafeArea(.container, edges: .top)": 1,
+    "swift/image-without-a11y\u0000Sources/NodePilotApp/RootView.swift\u0000Image(systemName: \"terminal.fill\")": 1,
+    "swift/image-without-a11y\u0000Sources/NodePilotApp/RootView.swift\u0000Image(systemName: \"checkmark.shield\")": 1,
+    "swift/image-without-a11y\u0000Sources/NodePilotApp/RootView.swift\u0000Image(systemName: \"gearshape\")": 1,
+    "swift/image-without-a11y\u0000Sources/NodePilotApp/RuntimesView.swift\u0000Image(systemName: \"ellipsis\")": 1
+  }
+}
